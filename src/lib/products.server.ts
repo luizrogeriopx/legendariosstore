@@ -171,7 +171,7 @@ export async function fetchShopeeMeta(url: string): Promise<ShopeeMeta> {
   if (price == null) {
     const hay = `${title ?? ""} ${description ?? ""}`;
     const m = hay.match(PRICE_RE);
-    if (m) {
+    if (m && m[1]) {
       const intPart = m[1].replace(/\./g, "");
       const frac = m[2] ?? "0";
       price = parseFloat(`${intPart}.${frac}`);
