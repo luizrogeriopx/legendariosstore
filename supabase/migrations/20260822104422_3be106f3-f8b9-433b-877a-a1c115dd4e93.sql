@@ -1,0 +1,1 @@
+grant insert, update, delete on public.products to authenticated;

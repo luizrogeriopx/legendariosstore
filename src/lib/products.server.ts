@@ -1,4 +1,5 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/integrations/supabase/types";
 
 export type Product = {
   id: string;
@@ -32,6 +33,8 @@ export type ProductInput = {
   sort_order?: number;
 };
 
+type AuthedClient = SupabaseClient<Database>;
+
 /**
  * Publishable (anon) client for public reads. RLS allows anon SELECT on
  * products. Created per-call inside server handlers.
@@ -39,7 +42,7 @@ export type ProductInput = {
 function getPublishableClient() {
   const url = process.env["SUPABASE_URL"]!;
   const key = process.env["SUPABASE_PUBLISHABLE_KEY"]!;
-  return createClient(url, key, {
+  return createClient<Database>(url, key, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 }
@@ -80,8 +83,11 @@ export async function getCategories(): Promise<string[]> {
   return [...set];
 }
 
-export async function createProduct(input: ProductInput, userId: string) {
-  const supabase = getPublishableClient();
+export async function createProduct(
+  input: ProductInput,
+  userId: string,
+  supabase: AuthedClient,
+) {
   const { data, error } = await supabase
     .from("products")
     .insert({ ...input, created_by: userId })
@@ -91,8 +97,11 @@ export async function createProduct(input: ProductInput, userId: string) {
   return data as Product;
 }
 
-export async function updateProduct(id: string, input: Partial<ProductInput>) {
-  const supabase = getPublishableClient();
+export async function updateProduct(
+  id: string,
+  input: Partial<ProductInput>,
+  supabase: AuthedClient,
+) {
   const { data, error } = await supabase
     .from("products")
     .update(input)
@@ -103,8 +112,7 @@ export async function updateProduct(id: string, input: Partial<ProductInput>) {
   return data as Product;
 }
 
-export async function deleteProduct(id: string) {
-  const supabase = getPublishableClient();
+export async function deleteProduct(id: string, supabase: AuthedClient) {
   const { error } = await supabase.from("products").delete().eq("id", id);
   if (error) throw new Error(error.message);
 }
@@ -119,7 +127,6 @@ export type ShopeeMeta = {
 const PRICE_RE = /R\$\s?(\d{1,3}(?:\.\d{3})*|\d+)(?:[.,](\d{1,2}))?/i;
 
 function pickMeta(html: string, prop: string): string | null {
-  // matches <meta property="og:title" content="...">
   const re = new RegExp(
     `<meta[^>]+(?:property|name)=["']${prop}["'][^>]*content=["']([^"']*)["']`,
     "i",
@@ -128,10 +135,12 @@ function pickMeta(html: string, prop: string): string | null {
     `<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["']${prop}["']`,
     "i",
   );
-  return (html.match(re)?.[1] ?? html.match(re2)?.[1] ?? null)?.replace(
-    /&/g,
-    "&",
-  ) ?? null;
+  return (
+    (html.match(re)?.[1] ?? html.match(re2)?.[1] ?? null)?.replace(
+      /&/g,
+      "&",
+    ) ?? null
+  );
 }
 
 /**
@@ -161,11 +170,12 @@ export async function fetchShopeeMeta(url: string): Promise<ShopeeMeta> {
     pickMeta(html, "og:image") ?? pickMeta(html, "twitter:image") ?? null;
   const description = pickMeta(html, "og:description") ?? null;
 
-  // price: try product:price:amount meta, then scan title/description for R$
   let price: number | null = null;
   const metaPrice = pickMeta(html, "product:price:amount");
   if (metaPrice) {
-    const n = parseFloat(metaPrice.replace(/[^\d.,]/g, "").replace(".", "").replace(",", "."));
+    const n = parseFloat(
+      metaPrice.replace(/[^\d.,]/g, "").replace(".", "").replace(",", "."),
+    );
     if (!Number.isNaN(n)) price = n;
   }
   if (price == null) {
