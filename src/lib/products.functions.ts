@@ -66,10 +66,7 @@ export const getCurrentUser = createServerFn({ method: "GET" })
       .from("user_roles")
       .select("role")
       .eq("user_id", userId);
-    const isAdmin =
-      (roles ?? []).some((r) => r.role === "admin") ||
-      // first-user fallback: no admins exist means this user is the initial admin
-      (roles ?? []).some((r) => r.role === "admin");
+    const isAdmin = (roles ?? []).some((r) => r.role === "admin");
     return { userId, email, isAdmin };
   });
 
@@ -78,7 +75,11 @@ export const addProduct = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data) => productSchema.parse(data))
   .handler(async ({ data, context }) => {
-    return createProduct(data as ProductInput, context.userId);
+    return createProduct(
+      data as ProductInput,
+      context.userId,
+      context.supabase,
+    );
   });
 
 export const editProduct = createServerFn({ method: "POST" })
@@ -89,8 +90,12 @@ export const editProduct = createServerFn({ method: "POST" })
         .object({ id: z.string().uuid(), fields: productSchema.partial() })
         .parse(data),
   )
-  .handler(async ({ data }) => {
-    return updateProduct(data.id, data.fields as Partial<ProductInput>);
+  .handler(async ({ data, context }) => {
+    return updateProduct(
+      data.id,
+      data.fields as Partial<ProductInput>,
+      context.supabase,
+    );
   });
 
 export const removeProduct = createServerFn({ method: "POST" })
@@ -98,7 +103,7 @@ export const removeProduct = createServerFn({ method: "POST" })
   .inputValidator(
     (data) => z.object({ id: z.string().uuid() }).parse(data),
   )
-  .handler(async ({ data }) => {
-    await deleteProduct(data.id);
+  .handler(async ({ data, context }) => {
+    await deleteProduct(data.id, context.supabase);
     return { ok: true };
   });
