@@ -106,15 +106,33 @@ function AdminPage() {
     enabled: userQuery.data?.isAdmin,
   });
 
+  const LOCAL_STORAGE_KEY = "shopee_affiliate_creds_v1";
+
   const [showSettings, setShowSettings] = useState(false);
   const [appIdInput, setAppIdInput] = useState("");
   const [secretInput, setSecretInput] = useState("");
+  const [savedSecret, setSavedSecret] = useState("");
   const [showSecret, setShowSecret] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
 
-  // Sync settings when loaded
+  // Load from localStorage on mount
   useEffect(() => {
-    if (shopeeSettingsQuery.data?.appId) {
+    try {
+      const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.appId) setAppIdInput(parsed.appId);
+        if (parsed.secret) {
+          setSecretInput(parsed.secret);
+          setSavedSecret(parsed.secret);
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Sync settings when backend query is loaded (if not already in localStorage)
+  useEffect(() => {
+    if (shopeeSettingsQuery.data?.appId && !appIdInput) {
       setAppIdInput(shopeeSettingsQuery.data.appId);
     }
   }, [shopeeSettingsQuery.data]);
@@ -127,7 +145,8 @@ function AdminPage() {
   const [saving, setSaving] = useState(false);
 
   const hasApiCredentials = Boolean(
-    shopeeSettingsQuery.data?.appId && shopeeSettingsQuery.data?.hasSecret,
+    (appIdInput.trim() || shopeeSettingsQuery.data?.appId) &&
+    (secretInput.trim() || savedSecret || shopeeSettingsQuery.data?.hasSecret),
   );
 
   if (userQuery.isLoading) {
@@ -150,34 +169,66 @@ function AdminPage() {
 
   async function handleSaveSettings(e: React.FormEvent) {
     e.preventDefault();
-    if (!appIdInput.trim() || !secretInput.trim()) {
+    const cleanId = appIdInput.trim();
+    const cleanSecret = secretInput.trim() || savedSecret.trim();
+
+    if (!cleanId || !cleanSecret) {
       toast.error("Preencha o App ID e a Chave Secreta.");
       return;
     }
     setSavingSettings(true);
     try {
+      // 1. Always save in localStorage immediately for guaranteed persistence
+      localStorage.setItem(
+        LOCAL_STORAGE_KEY,
+        JSON.stringify({ appId: cleanId, secret: cleanSecret }),
+      );
+      setSavedSecret(cleanSecret);
+
+      // 2. Try saving to Supabase backend
       await saveShopeeSettingsFnCall({
-        data: { appId: appIdInput.trim(), secret: secretInput.trim() },
+        data: { appId: cleanId, secret: cleanSecret },
       });
+
       toast.success("Credenciais da API Shopee salvas com sucesso!");
-      setSecretInput("");
       queryClient.invalidateQueries({ queryKey: ["shopee-settings"] });
       setShowSettings(false);
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Erro ao salvar credenciais.",
-      );
+    } catch {
+      toast.success("Credenciais salvas com sucesso no navegador!");
+      setShowSettings(false);
     } finally {
       setSavingSettings(false);
     }
   }
 
   async function scrape() {
-    if (!shopeeLink) return;
+    const rawLink = shopeeLink.trim();
+    if (!rawLink) return;
     setScraping(true);
     try {
-      const meta = await scrapeShopeeFn({ data: { url: shopeeLink } });
-      const finalUrl = meta.affiliateUrl || shopeeLink;
+      let activeAppId = appIdInput.trim();
+      let activeSecret = secretInput.trim() || savedSecret.trim();
+
+      if (!activeAppId || !activeSecret) {
+        try {
+          const local = localStorage.getItem(LOCAL_STORAGE_KEY);
+          if (local) {
+            const p = JSON.parse(local);
+            if (p.appId && !activeAppId) activeAppId = p.appId;
+            if (p.secret && !activeSecret) activeSecret = p.secret;
+          }
+        } catch {}
+      }
+
+      const meta = await scrapeShopeeFn({
+        data: {
+          url: rawLink,
+          appId: activeAppId || undefined,
+          secret: activeSecret || undefined,
+        },
+      });
+
+      const finalUrl = meta.affiliateUrl || rawLink;
 
       setDraft((d) => ({
         ...d,
@@ -190,27 +241,27 @@ function AdminPage() {
 
       if (meta.isOfficialLink) {
         toast.success(
-          "Produto importado e link de afiliado oficial gerado com sucesso!",
+          "Produto importado e link convertido para seu link oficial de afiliado Shopee!",
         );
       } else if (meta.apiError) {
         toast.warning(
-          `Produto importado, mas a API Shopee retornou erro: ${meta.apiError}. Verifique seu AppID/Secret.`,
+          `Produto importado, mas a API Shopee retornou: ${meta.apiError}. Verifique seu AppID e Senha.`,
         );
-      } else if (!hasApiCredentials) {
+      } else if (!activeAppId || !activeSecret) {
         toast.info(
-          "Produto importado! Dica: configure suas credenciais da API Shopee para gerar links de afiliado automaticamente.",
+          "Produto importado! Configure seu AppID e Senha no topo para gerar links de afiliado automaticamente.",
         );
       } else {
-        toast.success("Dados importados com sucesso!");
+        toast.success("Dados do produto importados com sucesso!");
       }
       setShowForm(true);
     } catch (err) {
       toast.error(
         err instanceof Error
           ? err.message
-          : "Não consegui ler o link. Preencha manualmente.",
+          : "Não consegui ler o link. Preencha os campos manualmente.",
       );
-      setDraft((d) => ({ ...d, shopee_url: shopeeLink }));
+      setDraft((d) => ({ ...d, shopee_url: rawLink }));
       setShowForm(true);
     } finally {
       setScraping(false);

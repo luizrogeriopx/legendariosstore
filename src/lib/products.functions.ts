@@ -50,23 +50,43 @@ export const getProducts = createServerFn({ method: "GET" }).handler(
 // ---- Scrape Shopee link + generate official affiliate short link (admin only) ----
 export const scrapeShopee = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data) => z.object({ url: z.string().url() }).parse(data))
+  .inputValidator((data) =>
+    z
+      .object({
+        url: z.string().url("URL inválida"),
+        appId: z.string().optional().nullable(),
+        secret: z.string().optional().nullable(),
+      })
+      .parse(data),
+  )
   .handler(async ({ data, context }): Promise<ShopeeMeta> => {
-    return fetchShopeeMeta(data.url, context.supabase);
+    return fetchShopeeMeta(data.url, {
+      appId: data.appId,
+      secret: data.secret,
+      supabase: context.supabase,
+    });
   });
 
 // ---- Shopee API Settings (admin only) ----
 export const getShopeeSettings = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
-    const creds = await getShopeeCredentials(context.supabase);
-    return {
-      appId: creds.appId || "",
-      hasSecret: Boolean(creds.secret),
-      maskedSecret: creds.secret
-        ? creds.secret.slice(0, 4) + "••••••••" + creds.secret.slice(-4)
-        : "",
-    };
+    try {
+      const creds = await getShopeeCredentials(context.supabase);
+      return {
+        appId: creds.appId || "",
+        hasSecret: Boolean(creds.secret),
+        maskedSecret: creds.secret
+          ? creds.secret.slice(0, 4) + "••••••••" + creds.secret.slice(-4)
+          : "",
+      };
+    } catch {
+      return {
+        appId: "",
+        hasSecret: false,
+        maskedSecret: "",
+      };
+    }
   });
 
 export const saveShopeeSettingsFn = createServerFn({ method: "POST" })
@@ -80,7 +100,13 @@ export const saveShopeeSettingsFn = createServerFn({ method: "POST" })
       .parse(data),
   )
   .handler(async ({ data, context }) => {
-    return saveShopeeSettings(data.appId, data.secret, context.supabase);
+    try {
+      await saveShopeeSettings(data.appId, data.secret, context.supabase);
+      return { ok: true };
+    } catch (err) {
+      console.warn("Could not save to Supabase affiliate_settings table:", err);
+      return { ok: false, warning: "Salvo localmente no navegador." };
+    }
   });
 
 // ---- Current session + admin check ----

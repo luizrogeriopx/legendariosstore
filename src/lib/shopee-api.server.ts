@@ -15,32 +15,106 @@ export type ShopeeCredentials = {
 };
 
 /**
+ * Follow redirects to find the canonical Shopee product URL
+ */
+export async function resolveShopeeUrl(url: string): Promise<string> {
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "pt-BR,pt;q=0.9,en;q=0.8",
+      },
+    });
+    return res.url || url;
+  } catch {
+    return url;
+  }
+}
+
+/**
  * Get credentials from Supabase affiliate_settings with fallback to process.env
  */
 export async function getShopeeCredentials(
-  supabase: SupabaseClient<Database>,
+  supabase?: SupabaseClient<Database>,
 ): Promise<ShopeeCredentials> {
   let appId = process.env["SHOPEE_APP_ID"] || null;
   let secret = process.env["SHOPEE_SECRET"] || null;
 
-  try {
-    const { data } = await supabase
-      .from("affiliate_settings")
-      .select("shopee_app_id, shopee_secret")
-      .eq("id", "default")
-      .maybeSingle();
+  if (supabase) {
+    try {
+      const { data } = await supabase
+        .from("affiliate_settings")
+        .select("shopee_app_id, shopee_secret")
+        .eq("id", "default")
+        .maybeSingle();
 
-    if (data?.shopee_app_id) {
-      appId = data.shopee_app_id;
+      if (data?.shopee_app_id) {
+        appId = data.shopee_app_id.trim();
+      }
+      if (data?.shopee_secret) {
+        secret = data.shopee_secret.trim();
+      }
+    } catch {
+      // Ignore if table does not exist
     }
-    if (data?.shopee_secret) {
-      secret = data.shopee_secret;
-    }
-  } catch (err) {
-    console.warn("Could not read affiliate_settings from db, using env if available:", err);
   }
 
   return { appId, secret };
+}
+
+/**
+ * Calls a single GraphQL mutation on Shopee Affiliate Open API
+ */
+async function executeShopeeGraphQL(
+  endpoint: string,
+  payloadObj: object,
+  appId: string,
+  secret: string,
+): Promise<{ shortLink?: string; error?: string }> {
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const payload = JSON.stringify(payloadObj);
+    const factor = `${appId}${timestamp}${payload}${secret}`;
+    const signature = await sha256Hex(factor);
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `SHA256 Credential=${appId}, Timestamp=${timestamp}, Signature=${signature}`,
+      },
+      body: payload,
+    });
+
+    const text = await response.text();
+    let json: any = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return { error: `HTTP ${response.status}: ${text.slice(0, 100)}` };
+    }
+
+    if (json?.data?.generateShortLink?.shortLink) {
+      return { shortLink: json.data.generateShortLink.shortLink };
+    }
+
+    if (json?.errors && Array.isArray(json.errors) && json.errors.length > 0) {
+      const msg = json.errors.map((e: any) => e.message || JSON.stringify(e)).join(", ");
+      return { error: msg };
+    }
+
+    if (!response.ok) {
+      return { error: `HTTP ${response.status}: ${text.slice(0, 100)}` };
+    }
+
+    return { error: "Nenhum shortLink retornado pela API da Shopee." };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /**
@@ -55,70 +129,71 @@ export async function generateShopeeAffiliateLink({
   appId: string;
   secret: string;
 }): Promise<{ shortLink: string | null; error?: string }> {
-  try {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const query = `mutation GenerateLink($originUrl: String!, $subIds: [String!]) {
+  const cleanAppId = appId.trim();
+  const cleanSecret = secret.trim();
+  const cleanUrl = url.trim();
+
+  if (!cleanAppId || !cleanSecret) {
+    return { shortLink: null, error: "AppID ou Chave Secreta não informados." };
+  }
+
+  // Resolve canonical target URL if this is a short redirect link
+  const resolvedUrl = await resolveShopeeUrl(cleanUrl);
+
+  const urlsToTry = Array.from(new Set([cleanUrl, resolvedUrl]));
+  const endpoints = [
+    "https://open-api.affiliate.shopee.com.br/graphql",
+    "https://open-api.affiliate.shopee.com/graphql",
+  ];
+
+  let lastError = "";
+
+  for (const targetUrl of urlsToTry) {
+    const payloadVariants = [
+      {
+        query: `mutation GenerateLink($originUrl: String!, $subIds: [String!]) {
   generateShortLink(input: { originUrl: $originUrl, subIds: $subIds }) {
     shortLink
   }
-}`;
-    const payloadObj = {
-      query,
-      variables: {
-        originUrl: url,
-        subIds: ["loja"],
+}`,
+        variables: {
+          originUrl: targetUrl,
+          subIds: ["loja"],
+        },
       },
-    };
-    const payload = JSON.stringify(payloadObj);
-    const factor = `${appId}${timestamp}${payload}${secret}`;
-    const signature = await sha256Hex(factor);
-
-    const endpoints = [
-      "https://open-api.affiliate.shopee.com.br/graphql",
-      "https://open-api.affiliate.shopee.com/graphql",
+      {
+        query: `mutation GenerateLink($originUrl: String!) {
+  generateShortLink(input: { originUrl: $originUrl }) {
+    shortLink
+  }
+}`,
+        variables: {
+          originUrl: targetUrl,
+        },
+      },
     ];
 
-    let lastError = "";
-
     for (const endpoint of endpoints) {
-      try {
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `SHA256 Credential=${appId}, Timestamp=${timestamp}, Signature=${signature}`,
-          },
-          body: payload,
-        });
+      for (const payloadObj of payloadVariants) {
+        const result = await executeShopeeGraphQL(
+          endpoint,
+          payloadObj,
+          cleanAppId,
+          cleanSecret,
+        );
 
-        if (response.ok) {
-          const result = (await response.json()) as {
-            data?: { generateShortLink?: { shortLink?: string } };
-            errors?: Array<{ message: string }>;
-          };
-          if (result?.data?.generateShortLink?.shortLink) {
-            return { shortLink: result.data.generateShortLink.shortLink };
-          }
-          if (result?.errors && result.errors.length > 0) {
-            lastError = result.errors.map((e) => e.message).join(", ");
-          }
-        } else {
-          const errText = await response.text();
-          lastError = `HTTP ${response.status}: ${errText}`;
+        if (result.shortLink) {
+          return { shortLink: result.shortLink };
         }
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
+        if (result.error) {
+          lastError = result.error;
+        }
       }
     }
-
-    return {
-      shortLink: null,
-      error: lastError || "Não foi possível gerar o link de afiliado oficial.",
-    };
-  } catch (err) {
-    return {
-      shortLink: null,
-      error: err instanceof Error ? err.message : "Erro desconhecido na API Shopee",
-    };
   }
+
+  return {
+    shortLink: null,
+    error: lastError || "Não foi possível gerar o link de afiliado oficial.",
+  };
 }

@@ -167,41 +167,75 @@ function pickMeta(html: string, prop: string): string | null {
 import {
   getShopeeCredentials,
   generateShopeeAffiliateLink,
+  resolveShopeeUrl,
 } from "./shopee-api.server";
+
+function parseTitleFromSlug(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const pathname = u.pathname;
+    const match = pathname.match(/\/([^/]+)-i\.\d+\.\d+/);
+    if (match && match[1]) {
+      const decoded = decodeURIComponent(match[1]).replace(/-/g, " ");
+      return decoded.charAt(0).toUpperCase() + decoded.slice(1);
+    }
+  } catch {}
+  return null;
+}
 
 /**
  * Best-effort Shopee product metadata scraper & affiliate link generator.
- * Fetches the product page HTML and extracts Open Graph tags + price.
+ * Fetches the product page HTML and extracts Open Graph tags, JSON-LD, and price.
  * When Shopee API credentials (AppID + Secret) are available, automatically generates
  * the user's official affiliate shortlink.
  */
 export async function fetchShopeeMeta(
   url: string,
-  supabase?: AuthedClient,
+  options?: {
+    appId?: string | null;
+    secret?: string | null;
+    supabase?: AuthedClient;
+  },
 ): Promise<ShopeeMeta> {
   let affiliateUrl: string | null = url;
   let isOfficialLink = false;
   let apiError: string | null = null;
 
-  if (supabase) {
-    const creds = await getShopeeCredentials(supabase);
-    if (creds.appId && creds.secret) {
-      const linkResult = await generateShopeeAffiliateLink({
-        url,
-        appId: creds.appId,
-        secret: creds.secret,
-      });
-      if (linkResult.shortLink) {
-        affiliateUrl = linkResult.shortLink;
-        isOfficialLink = true;
-      } else if (linkResult.error) {
-        apiError = linkResult.error;
-      }
+  let appId = options?.appId?.trim() || null;
+  let secret = options?.secret?.trim() || null;
+
+  if ((!appId || !secret) && options?.supabase) {
+    const creds = await getShopeeCredentials(options.supabase);
+    if (creds.appId) appId = creds.appId;
+    if (creds.secret) secret = creds.secret;
+  }
+
+  if (appId && secret) {
+    const linkResult = await generateShopeeAffiliateLink({
+      url,
+      appId,
+      secret,
+    });
+    if (linkResult.shortLink) {
+      affiliateUrl = linkResult.shortLink;
+      isOfficialLink = true;
+    } else if (linkResult.error) {
+      apiError = linkResult.error;
     }
   }
 
+  let canonicalUrl = url;
   try {
-    const res = await fetch(url, {
+    canonicalUrl = await resolveShopeeUrl(url);
+  } catch {}
+
+  let title: string | null = parseTitleFromSlug(canonicalUrl) || parseTitleFromSlug(url);
+  let image: string | null = null;
+  let description: string | null = null;
+  let price: number | null = null;
+
+  try {
+    const res = await fetch(canonicalUrl, {
       headers: {
         "user-agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
@@ -211,61 +245,65 @@ export async function fetchShopeeMeta(
       redirect: "follow",
     });
 
-    if (!res.ok) {
-      return {
-        title: null,
-        image: null,
-        description: null,
-        price: null,
-        affiliateUrl,
-        isOfficialLink,
-        apiError,
-      };
-    }
-    const html = await res.text();
+    if (res.ok) {
+      const html = await res.text();
 
-    const title =
-      pickMeta(html, "og:title") ?? pickMeta(html, "twitter:title") ?? null;
-    const image =
-      pickMeta(html, "og:image") ?? pickMeta(html, "twitter:image") ?? null;
-    const description = pickMeta(html, "og:description") ?? null;
+      const metaTitle =
+        pickMeta(html, "og:title") ?? pickMeta(html, "twitter:title");
+      if (metaTitle) {
+        title = metaTitle.replace(/\s*\|\s*Shopee\s*Brasil.*$/i, "").trim();
+      } else {
+        const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+        if (titleMatch && titleMatch[1]) {
+          title = titleMatch[1].replace(/\s*\|\s*Shopee\s*Brasil.*$/i, "").trim();
+        }
+      }
 
-    let price: number | null = null;
-    const metaPrice = pickMeta(html, "product:price:amount");
-    if (metaPrice) {
-      const n = parseFloat(
-        metaPrice.replace(/[^\d.,]/g, "").replace(".", "").replace(",", "."),
-      );
-      if (!Number.isNaN(n)) price = n;
-    }
-    if (price == null) {
-      const hay = `${title ?? ""} ${description ?? ""}`;
-      const m = hay.match(PRICE_RE);
-      if (m && m[1]) {
-        const intPart = m[1].replace(/\./g, "");
-        const frac = m[2] ?? "0";
-        price = parseFloat(`${intPart}.${frac}`);
+      image =
+        pickMeta(html, "og:image") ?? pickMeta(html, "twitter:image") ?? null;
+      description = pickMeta(html, "og:description") ?? null;
+
+      // Extract JSON-LD if available
+      try {
+        const jsonLdMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/i);
+        if (jsonLdMatch && jsonLdMatch[1]) {
+          const ldData = JSON.parse(jsonLdMatch[1]);
+          if (ldData?.name && !title) title = ldData.name;
+          if (ldData?.image && !image) image = Array.isArray(ldData.image) ? ldData.image[0] : ldData.image;
+          if (ldData?.offers?.price && !price) price = Number(ldData.offers.price);
+          if (ldData?.description && !description) description = ldData.description;
+        }
+      } catch {}
+
+      const metaPrice = pickMeta(html, "product:price:amount");
+      if (metaPrice && !price) {
+        const n = parseFloat(
+          metaPrice.replace(/[^\d.,]/g, "").replace(".", "").replace(",", "."),
+        );
+        if (!Number.isNaN(n)) price = n;
+      }
+
+      if (price == null) {
+        const hay = `${title ?? ""} ${description ?? ""}`;
+        const m = hay.match(PRICE_RE);
+        if (m && m[1]) {
+          const intPart = m[1].replace(/\./g, "");
+          const frac = m[2] ?? "0";
+          price = parseFloat(`${intPart}.${frac}`);
+        }
       }
     }
-
-    return {
-      title,
-      image,
-      description,
-      price,
-      affiliateUrl,
-      isOfficialLink,
-      apiError,
-    };
   } catch {
-    return {
-      title: null,
-      image: null,
-      description: null,
-      price: null,
-      affiliateUrl,
-      isOfficialLink,
-      apiError,
-    };
+    // Keep fallback title from slug
   }
+
+  return {
+    title,
+    image,
+    description,
+    price,
+    affiliateUrl,
+    isOfficialLink,
+    apiError,
+  };
 }
