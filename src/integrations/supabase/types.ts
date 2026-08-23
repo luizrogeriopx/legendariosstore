@@ -89,27 +89,6 @@ export type Database = {
         }
         Relationships: []
       }
-      affiliate_settings: {
-        Row: {
-          id: string
-          shopee_app_id: string | null
-          shopee_secret: string | null
-          updated_at: string
-        }
-        Insert: {
-          id?: string
-          shopee_app_id?: string | null
-          shopee_secret?: string | null
-          updated_at?: string
-        }
-        Update: {
-          id?: string
-          shopee_app_id?: string | null
-          shopee_secret?: string | null
-          updated_at?: string
-        }
-        Relationships: []
-      }
     }
     Views: {
       [_ in never]: never
