@@ -312,9 +312,39 @@ export async function fetchShopeeProductOffer({
 
   if (!cleanAppId || !cleanSecret) return null;
 
-  // Build clean search terms: exact itemId, cleaned keywords
+  // 1) Exact lookup by itemId (most reliable when the link has the item id)
+  if (itemId && /^\d+$/.test(String(itemId))) {
+    const idPayload = {
+      query: `query ItemOffer($itemId: Int64) {
+  productOfferV2(itemId: $itemId, page: 1, limit: 1) {
+    nodes {
+      itemId
+      productName
+      productLink
+      offerLink
+      imageUrl
+      priceMin
+      priceMax
+      price
+      commissionRate
+      ratingStar
+      sales
+      shopName
+    }
+  }
+}`,
+      variables: { itemId: Number(itemId) },
+    };
+
+    for (const endpoint of SHOPEE_ENDPOINTS) {
+      const res = await callShopeeGraphQL(endpoint, idPayload, cleanAppId, cleanSecret);
+      const node = res.data?.productOfferV2?.nodes?.[0];
+      if (res.ok && node) return mapOfferNode(node);
+    }
+  }
+
+  // 2) Keyword search fallback
   const searchTerms: string[] = [];
-  if (itemId) searchTerms.push(String(itemId));
   if (keyword) {
     const cleaned = keyword.replace(/[^\w\s\u00C0-\u00FF]/gi, " ").trim();
     if (cleaned) {
@@ -324,6 +354,7 @@ export async function fetchShopeeProductOffer({
       if (words && words !== cleaned) searchTerms.push(words);
     }
   }
+
 
   for (const term of searchTerms) {
     const payload = {
