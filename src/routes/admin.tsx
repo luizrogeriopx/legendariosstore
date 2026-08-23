@@ -104,8 +104,7 @@ const emptyDraft: ProductInput = {
   sort_order: 0,
 };
 
-const CATEGORY_QUICK_SEARCH = [
-  "Todos",
+const INITIAL_DEFAULT_CATEGORIES = [
   "Eletrônicos & Fones",
   "Relógios & Smartwatch",
   "Moda Masculina",
@@ -115,6 +114,9 @@ const CATEGORY_QUICK_SEARCH = [
   "Casa & Cozinha",
   "Games & Acessórios",
 ];
+
+const CATEGORIES_STORAGE_KEY = "shopee_managed_categories_v2";
+const DELETED_CATEGORIES_KEY = "shopee_deleted_categories_v2";
 
 function AdminPage() {
   const navigate = useNavigate();
@@ -140,19 +142,32 @@ function AdminPage() {
   const [bulkSyncKeyword, setBulkSyncKeyword] = useState("");
 
   // Category Management State
-  const CATEGORIES_STORAGE_KEY = "shopee_custom_categories_v1";
   const [showCategoriesModal, setShowCategoriesModal] = useState(false);
   const [newCategoryInput, setNewCategoryInput] = useState("");
   const [editingCategoryOldName, setEditingCategoryOldName] = useState<string | null>(null);
   const [editingCategoryNewName, setEditingCategoryNewName] = useState("");
   const [savingCategory, setSavingCategory] = useState(false);
-  const [customCategories, setCustomCategories] = useState<string[]>(() => {
+
+  const [managedCategories, setManagedCategories] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem("shopee_custom_categories_v1");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
+      const saved = localStorage.getItem(CATEGORIES_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return INITIAL_DEFAULT_CATEGORIES;
+  });
+
+  const [deletedCategories, setDeletedCategories] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem(DELETED_CATEGORIES_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return new Set(parsed);
+      }
+    } catch {}
+    return new Set();
   });
 
   // Vitrine Search & Category Filtering
@@ -249,18 +264,23 @@ function AdminPage() {
     return counts;
   }, [products]);
 
-  // All unique categories (from products + custom + defaults)
+  // All active unique categories (managed categories + products categories, minus deleted)
   const allCategories = useMemo(() => {
     const set = new Set<string>();
-    CATEGORY_QUICK_SEARCH.filter((c) => c !== "Todos").forEach((c) => set.add(c));
-    customCategories.forEach((c) => {
-      if (c.trim()) set.add(c.trim());
+    managedCategories.forEach((c) => {
+      const trimmed = c.trim();
+      if (trimmed && !deletedCategories.has(trimmed)) {
+        set.add(trimmed);
+      }
     });
     products.forEach((p) => {
-      if (p.category?.trim()) set.add(p.category.trim());
+      const trimmed = p.category?.trim();
+      if (trimmed && !deletedCategories.has(trimmed)) {
+        set.add(trimmed);
+      }
     });
     return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
-  }, [products, customCategories]);
+  }, [products, managedCategories, deletedCategories]);
 
   // Vitrine search + category filter memo
   const filteredVitrineProducts = useMemo(() => {
@@ -288,11 +308,22 @@ function AdminPage() {
       toast.error("Esta categoria já existe.");
       return;
     }
-    const updated = Array.from(new Set([...customCategories, trimmed]));
-    setCustomCategories(updated);
+
+    const newDeleted = new Set(deletedCategories);
+    if (newDeleted.has(trimmed)) {
+      newDeleted.delete(trimmed);
+      setDeletedCategories(newDeleted);
+      try {
+        localStorage.setItem(DELETED_CATEGORIES_KEY, JSON.stringify(Array.from(newDeleted)));
+      } catch {}
+    }
+
+    const updated = Array.from(new Set([...managedCategories, trimmed]));
+    setManagedCategories(updated);
     try {
       localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(updated));
     } catch {}
+
     setNewCategoryInput("");
     toast.success(`Categoria "${trimmed}" adicionada com sucesso!`);
   }
@@ -309,27 +340,45 @@ function AdminPage() {
     }
     setSavingCategory(true);
     try {
-      await renameCategoryFnCall({
-        data: { oldCategory: oldCat, newCategory: trimmedNew },
-      });
-
-      const updatedCustom = customCategories.map((c) => (c === oldCat ? trimmedNew : c));
-      if (!updatedCustom.includes(trimmedNew)) updatedCustom.push(trimmedNew);
-      setCustomCategories(updatedCustom);
+      // 1. Mark oldCat as deleted so it never reappears
+      const newDeleted = new Set(deletedCategories);
+      newDeleted.add(oldCat);
+      newDeleted.delete(trimmedNew);
+      setDeletedCategories(newDeleted);
       try {
-        localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(updatedCustom));
+        localStorage.setItem(DELETED_CATEGORIES_KEY, JSON.stringify(Array.from(newDeleted)));
       } catch {}
+
+      // 2. Replace in managedCategories list
+      const updatedManaged = managedCategories
+        .map((c) => (c === oldCat ? trimmedNew : c))
+        .filter((c) => c !== oldCat);
+      if (!updatedManaged.includes(trimmedNew)) {
+        updatedManaged.push(trimmedNew);
+      }
+      setManagedCategories(updatedManaged);
+      try {
+        localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(updatedManaged));
+      } catch {}
+
+      // 3. Update database if any products used oldCat
+      const count = categoryCounts[oldCat] || 0;
+      if (count > 0) {
+        await renameCategoryFnCall({
+          data: { oldCategory: oldCat, newCategory: trimmedNew },
+        });
+      }
 
       if (vitrineCategoryFilter === oldCat) {
         setVitrineCategoryFilter(trimmedNew);
       }
 
       queryClient.invalidateQueries({ queryKey: ["products"] });
-      toast.success(`Categoria renomeada de "${oldCat}" para "${trimmedNew}"!`);
+      toast.success(`Categoria alterada de "${oldCat}" para "${trimmedNew}"!`);
       setEditingCategoryOldName(null);
       setEditingCategoryNewName("");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Erro ao renomear categoria.");
+      toast.error(err instanceof Error ? err.message : "Erro ao alterar categoria.");
     } finally {
       setSavingCategory(false);
     }
@@ -346,26 +395,51 @@ function AdminPage() {
 
     setSavingCategory(true);
     try {
+      // 1. Add to deletedCategories
+      const newDeleted = new Set(deletedCategories);
+      newDeleted.add(cat);
+      setDeletedCategories(newDeleted);
+      try {
+        localStorage.setItem(DELETED_CATEGORIES_KEY, JSON.stringify(Array.from(newDeleted)));
+      } catch {}
+
+      // 2. Remove from managedCategories
+      const updatedManaged = managedCategories.filter((c) => c !== cat);
+      setManagedCategories(updatedManaged);
+      try {
+        localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(updatedManaged));
+      } catch {}
+
+      // 3. If products used this category, update database
       if (count > 0) {
         await deleteCategoryFnCall({ data: { category: cat } });
       }
-      const updatedCustom = customCategories.filter((c) => c !== cat);
-      setCustomCategories(updatedCustom);
-      try {
-        localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(updatedCustom));
-      } catch {}
 
       if (vitrineCategoryFilter === cat) {
         setVitrineCategoryFilter(null);
       }
 
       queryClient.invalidateQueries({ queryKey: ["products"] });
-      toast.success(`Categoria "${cat}" removida.`);
+      toast.success(`Categoria "${cat}" excluída com sucesso!`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Erro ao excluir categoria.");
     } finally {
       setSavingCategory(false);
     }
+  }
+
+  function handleResetDefaultCategories() {
+    if (!confirm("Deseja restaurar as categorias padrão do sistema?")) return;
+    setDeletedCategories(new Set());
+    try {
+      localStorage.removeItem(DELETED_CATEGORIES_KEY);
+    } catch {}
+    setManagedCategories(INITIAL_DEFAULT_CATEGORIES);
+    try {
+      localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(INITIAL_DEFAULT_CATEGORIES));
+    } catch {}
+    queryClient.invalidateQueries({ queryKey: ["products"] });
+    toast.success("Categorias padrão restauradas com sucesso!");
   }
 
   if (userQuery.isLoading) {
@@ -1723,7 +1797,17 @@ function AdminPage() {
                   )}
                 </div>
 
-                <DialogFooter className="mt-4 pt-2 border-t border-border">
+                <DialogFooter className="mt-4 pt-2 border-t border-border flex items-center justify-between gap-2 sm:justify-between">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleResetDefaultCategories}
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                    title="Restaurar lista inicial de categorias padrão"
+                  >
+                    Restaurar Padrões
+                  </Button>
                   <Button
                     type="button"
                     variant="outline"
@@ -2007,7 +2091,7 @@ function AdminPage() {
                   <span className="text-xs font-semibold text-muted-foreground">
                     Categorias rápidas:
                   </span>
-                  {CATEGORY_QUICK_SEARCH.map((cat) => (
+                  {["Todos", ...allCategories].map((cat) => (
                     <button
                       key={cat}
                       onClick={() => {
