@@ -21,11 +21,18 @@ export type ShopeeProductOffer = {
   price: number | null;
   priceMin: number | null;
   priceMax: number | null;
+  discount_pct?: number | null;
   offerLink?: string | null;
   ratingStar?: number | null;
   sales?: number | null;
   shopName?: string | null;
+  commissionRate?: number | null;
 };
+
+const SHOPEE_ENDPOINTS = [
+  "https://open-api.affiliate.shopee.com.br/graphql",
+  "https://open-api.affiliate.shopee.com/graphql",
+];
 
 /**
  * Follow redirects to find the canonical Shopee product URL
@@ -63,7 +70,7 @@ export function extractShopeeParams(url: string): {
     // Format 1: /slug-name-i.123456.789012
     const m1 = pathname.match(/\/([^/]+)-i\.(\d+)\.(\d+)/);
     if (m1) {
-      const slug = decodeURIComponent(m1[1]).replace(/-/g, " ");
+      const slug = decodeURIComponent(m1[1]).replace(/-/g, " ").trim();
       return {
         slug: slug.charAt(0).toUpperCase() + slug.slice(1),
         shopId: m1[2],
@@ -81,7 +88,7 @@ export function extractShopeeParams(url: string): {
       };
     }
 
-    // Format 3: -i.123456.789012
+    // Format 3: -i.123456.789012 without leading slug
     const m3 = pathname.match(/-i\.(\d+)\.(\d+)/);
     if (m3) {
       return {
@@ -126,14 +133,14 @@ export async function getShopeeCredentials(
 }
 
 /**
- * Calls a single GraphQL mutation on Shopee Affiliate Open API
+ * Executes a GraphQL call with Shopee SHA256 Authorization header
  */
-async function executeShopeeGraphQL(
+async function callShopeeGraphQL(
   endpoint: string,
   payloadObj: object,
   appId: string,
   secret: string,
-): Promise<{ shortLink?: string; error?: string }> {
+): Promise<{ data?: any; errors?: Array<{ message: string }>; rawText?: string; ok: boolean }> {
   try {
     const timestamp = Math.floor(Date.now() / 1000);
     const payload = JSON.stringify(payloadObj);
@@ -149,35 +156,81 @@ async function executeShopeeGraphQL(
       body: payload,
     });
 
-    const text = await response.text();
+    const rawText = await response.text();
     let json: any = null;
     try {
-      json = JSON.parse(text);
+      json = JSON.parse(rawText);
     } catch {
-      return { error: `HTTP ${response.status}: ${text.slice(0, 100)}` };
+      return { ok: false, rawText };
     }
 
-    if (json?.data?.generateShortLink?.shortLink) {
-      return { shortLink: json.data.generateShortLink.shortLink };
+    if (json?.data) {
+      return { ok: true, data: json.data, errors: json.errors };
     }
 
-    if (json?.errors && Array.isArray(json.errors) && json.errors.length > 0) {
-      const msg = json.errors.map((e: any) => e.message || JSON.stringify(e)).join(", ");
-      return { error: msg };
+    if (json?.errors) {
+      return { ok: false, errors: json.errors, rawText };
     }
 
-    if (!response.ok) {
-      return { error: `HTTP ${response.status}: ${text.slice(0, 100)}` };
-    }
-
-    return { error: "Nenhum shortLink retornado pela API da Shopee." };
+    return { ok: response.ok, rawText };
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      errors: [{ message: err instanceof Error ? err.message : String(err) }],
+    };
   }
 }
 
 /**
- * Generate official Shopee affiliate short link using the Shopee Affiliate Open API (GraphQL)
+ * Test Shopee API credentials by querying productOfferV2(limit: 1)
+ */
+export async function testShopeeApiCredentials(
+  appId: string,
+  secret: string,
+): Promise<{ ok: boolean; message: string }> {
+  const cleanAppId = appId.trim();
+  const cleanSecret = secret.trim();
+
+  if (!cleanAppId || !cleanSecret) {
+    return { ok: false, message: "App ID e Chave Secreta são obrigatórios." };
+  }
+
+  const payload = {
+    query: `query TestQuery {
+  productOfferV2(page: 1, limit: 1) {
+    pageInfo {
+      page
+      limit
+    }
+  }
+}`,
+  };
+
+  let lastError = "";
+
+  for (const endpoint of SHOPEE_ENDPOINTS) {
+    const res = await callShopeeGraphQL(endpoint, payload, cleanAppId, cleanSecret);
+    if (res.ok && res.data?.productOfferV2) {
+      return {
+        ok: true,
+        message: "Conexão com a API Oficial da Shopee validada com sucesso!",
+      };
+    }
+    if (res.errors && res.errors.length > 0) {
+      lastError = res.errors.map((e) => e.message).join(", ");
+    } else if (res.rawText) {
+      lastError = res.rawText.slice(0, 150);
+    }
+  }
+
+  return {
+    ok: false,
+    message: lastError || "Falha ao autenticar na API Shopee. Verifique se o App ID e a Chave Secreta estão corretos.",
+  };
+}
+
+/**
+ * Generate official Shopee affiliate short link using generateShortLink mutation
  */
 export async function generateShopeeAffiliateLink({
   url,
@@ -196,29 +249,20 @@ export async function generateShopeeAffiliateLink({
     return { shortLink: null, error: "AppID ou Chave Secreta não informados." };
   }
 
-  // Resolve canonical target URL if this is a short redirect link
   const resolvedUrl = await resolveShopeeUrl(cleanUrl);
-
   const urlsToTry = Array.from(new Set([cleanUrl, resolvedUrl]));
-  const endpoints = [
-    "https://open-api.affiliate.shopee.com.br/graphql",
-    "https://open-api.affiliate.shopee.com/graphql",
-  ];
 
   let lastError = "";
 
   for (const targetUrl of urlsToTry) {
-    const payloadVariants = [
+    const payloads = [
       {
         query: `mutation GenerateLink($originUrl: String!, $subIds: [String!]) {
   generateShortLink(input: { originUrl: $originUrl, subIds: $subIds }) {
     shortLink
   }
 }`,
-        variables: {
-          originUrl: targetUrl,
-          subIds: ["loja"],
-        },
+        variables: { originUrl: targetUrl, subIds: ["loja"] },
       },
       {
         query: `mutation GenerateLink($originUrl: String!) {
@@ -226,26 +270,18 @@ export async function generateShopeeAffiliateLink({
     shortLink
   }
 }`,
-        variables: {
-          originUrl: targetUrl,
-        },
+        variables: { originUrl: targetUrl },
       },
     ];
 
-    for (const endpoint of endpoints) {
-      for (const payloadObj of payloadVariants) {
-        const result = await executeShopeeGraphQL(
-          endpoint,
-          payloadObj,
-          cleanAppId,
-          cleanSecret,
-        );
-
-        if (result.shortLink) {
-          return { shortLink: result.shortLink };
+    for (const endpoint of SHOPEE_ENDPOINTS) {
+      for (const p of payloads) {
+        const res = await callShopeeGraphQL(endpoint, p, cleanAppId, cleanSecret);
+        if (res.ok && res.data?.generateShortLink?.shortLink) {
+          return { shortLink: res.data.generateShortLink.shortLink };
         }
-        if (result.error) {
-          lastError = result.error;
+        if (res.errors && res.errors.length > 0) {
+          lastError = res.errors.map((e) => e.message).join(", ");
         }
       }
     }
@@ -258,7 +294,7 @@ export async function generateShopeeAffiliateLink({
 }
 
 /**
- * Query Shopee Affiliate Open API productOfferV2 for official product info (image, title, price, rating, sold)
+ * Query Shopee Affiliate Open API productOfferV2 for official product info
  */
 export async function fetchShopeeProductOffer({
   itemId,
@@ -276,19 +312,22 @@ export async function fetchShopeeProductOffer({
 
   if (!cleanAppId || !cleanSecret) return null;
 
-  const endpoints = [
-    "https://open-api.affiliate.shopee.com.br/graphql",
-    "https://open-api.affiliate.shopee.com/graphql",
-  ];
-
-  const searchTerms = [
-    itemId ? String(itemId) : null,
-    keyword ? keyword.trim() : null,
-  ].filter(Boolean) as string[];
+  // Build clean search terms: exact itemId, cleaned keywords
+  const searchTerms: string[] = [];
+  if (itemId) searchTerms.push(String(itemId));
+  if (keyword) {
+    const cleaned = keyword.replace(/[^\w\s\u00C0-\u00FF]/gi, " ").trim();
+    if (cleaned) {
+      searchTerms.push(cleaned);
+      // Also try first 4 main words
+      const words = cleaned.split(/\s+/).slice(0, 4).join(" ");
+      if (words && words !== cleaned) searchTerms.push(words);
+    }
+  }
 
   for (const term of searchTerms) {
-    const payloadObj = {
-      query: `query SearchOffer($keyword: String, $page: Int, $limit: Int) {
+    const payload = {
+      query: `query SearchProductOffer($keyword: String, $page: Int, $limit: Int) {
   productOfferV2(keyword: $keyword, page: $page, limit: $limit) {
     nodes {
       itemId
@@ -299,6 +338,7 @@ export async function fetchShopeeProductOffer({
       priceMin
       priceMax
       price
+      commissionRate
       ratingStar
       sales
       shopName
@@ -312,50 +352,43 @@ export async function fetchShopeeProductOffer({
       },
     };
 
-    for (const endpoint of endpoints) {
-      try {
-        const timestamp = Math.floor(Date.now() / 1000);
-        const payload = JSON.stringify(payloadObj);
-        const factor = `${cleanAppId}${timestamp}${payload}${cleanSecret}`;
-        const signature = await sha256Hex(factor);
+    for (const endpoint of SHOPEE_ENDPOINTS) {
+      const res = await callShopeeGraphQL(endpoint, payload, cleanAppId, cleanSecret);
+      if (res.ok && res.data?.productOfferV2?.nodes) {
+        const nodes = res.data.productOfferV2.nodes;
+        if (Array.isArray(nodes) && nodes.length > 0) {
+          // If itemId is given, prefer exact matching node
+          let match = itemId
+            ? nodes.find((n: any) => String(n.itemId) === String(itemId))
+            : null;
+          if (!match) match = nodes[0];
 
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `SHA256 Credential=${cleanAppId}, Timestamp=${timestamp}, Signature=${signature}`,
-          },
-          body: payload,
-        });
+          if (match) {
+            const priceVal = parseFloat(match.price || match.priceMin || match.priceMax || 0);
+            const pMax = match.priceMax ? parseFloat(match.priceMax) : null;
+            const pMin = match.priceMin ? parseFloat(match.priceMin) : null;
+            let discount_pct: number | null = null;
 
-        if (response.ok) {
-          const json = (await response.json()) as any;
-          const nodes = json?.data?.productOfferV2?.nodes;
-          if (Array.isArray(nodes) && nodes.length > 0) {
-            let found = itemId
-              ? nodes.find((n: any) => String(n.itemId) === String(itemId))
-              : null;
-            if (!found) found = nodes[0];
-
-            if (found) {
-              const p = parseFloat(found.price || found.priceMin || found.priceMax || 0);
-              return {
-                itemId: String(found.itemId),
-                productName: found.productName,
-                imageUrl: found.imageUrl,
-                price: p > 0 ? p : null,
-                priceMin: found.priceMin ? parseFloat(found.priceMin) : null,
-                priceMax: found.priceMax ? parseFloat(found.priceMax) : null,
-                offerLink: found.offerLink || null,
-                ratingStar: found.ratingStar ? parseFloat(found.ratingStar) : null,
-                sales: found.sales ? parseInt(found.sales, 10) : null,
-                shopName: found.shopName || null,
-              };
+            if (pMax && priceVal && pMax > priceVal) {
+              discount_pct = Math.round(((pMax - priceVal) / pMax) * 100);
             }
+
+            return {
+              itemId: String(match.itemId),
+              productName: match.productName,
+              imageUrl: match.imageUrl,
+              price: priceVal > 0 ? priceVal : null,
+              priceMin: pMin,
+              priceMax: pMax,
+              discount_pct,
+              offerLink: match.offerLink || null,
+              ratingStar: match.ratingStar ? parseFloat(match.ratingStar) : null,
+              sales: match.sales ? parseInt(match.sales, 10) : null,
+              shopName: match.shopName || null,
+              commissionRate: match.commissionRate ? parseFloat(match.commissionRate) : null,
+            };
           }
         }
-      } catch {
-        // Continue to next endpoint/term
       }
     }
   }

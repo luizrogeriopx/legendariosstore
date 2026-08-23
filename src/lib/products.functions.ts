@@ -14,7 +14,10 @@ import {
   type ProductInput,
   type ShopeeMeta,
 } from "./products.server";
-import { getShopeeCredentials } from "./shopee-api.server";
+import {
+  getShopeeCredentials,
+  testShopeeApiCredentials,
+} from "./shopee-api.server";
 
 export const productSchema = z.object({
   title: z.string().min(2).max(200),
@@ -107,6 +110,20 @@ export const saveShopeeSettingsFn = createServerFn({ method: "POST" })
       console.warn("Could not save to Supabase affiliate_settings table:", err);
       return { ok: false, warning: "Salvo localmente no navegador." };
     }
+  });
+
+export const testShopeeConnection = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) =>
+    z
+      .object({
+        appId: z.string().trim().min(1, "App ID é obrigatório"),
+        secret: z.string().trim().min(1, "Chave Secreta é obrigatória"),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data }) => {
+    return testShopeeApiCredentials(data.appId, data.secret);
   });
 
 // ---- Current session + admin check ----

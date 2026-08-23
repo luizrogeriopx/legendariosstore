@@ -38,6 +38,7 @@ import {
   scrapeShopee,
   getShopeeSettings,
   saveShopeeSettingsFn,
+  testShopeeConnection,
 } from "@/lib/products.functions";
 import type { Product, ProductInput } from "@/lib/products.server";
 
@@ -80,6 +81,7 @@ function AdminPage() {
   const scrapeShopeeFn = useServerFn(scrapeShopee);
   const getShopeeSettingsFn = useServerFn(getShopeeSettings);
   const saveShopeeSettingsFnCall = useServerFn(saveShopeeSettingsFn);
+  const testShopeeConnectionFn = useServerFn(testShopeeConnection);
 
   const userQuery = useQuery({
     queryKey: ["current-user"],
@@ -114,6 +116,7 @@ function AdminPage() {
   const [savedSecret, setSavedSecret] = useState("");
   const [showSecret, setShowSecret] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [testingApi, setTestingApi] = useState(false);
 
   // Load from localStorage on mount
   useEffect(() => {
@@ -198,6 +201,33 @@ function AdminPage() {
       setShowSettings(false);
     } finally {
       setSavingSettings(false);
+    }
+  }
+
+  async function handleTestApi() {
+    const cleanId = appIdInput.trim();
+    const cleanSecret = secretInput.trim() || savedSecret.trim();
+
+    if (!cleanId || !cleanSecret) {
+      toast.error("Preencha o App ID e a Chave Secreta antes de testar.");
+      return;
+    }
+    setTestingApi(true);
+    try {
+      const res = await testShopeeConnectionFn({
+        data: { appId: cleanId, secret: cleanSecret },
+      });
+      if (res.ok) {
+        toast.success(res.message);
+      } else {
+        toast.error(res.message);
+      }
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Erro ao testar API Shopee.",
+      );
+    } finally {
+      setTestingApi(false);
     }
   }
 
@@ -481,7 +511,21 @@ function AdminPage() {
                     <ExternalLink className="inline h-3 w-3" />
                   </a>
                 </p>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={testingApi}
+                    onClick={handleTestApi}
+                  >
+                    {testingApi ? (
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="mr-1.5 h-4 w-4 text-emerald-500" />
+                    )}
+                    Testar Conexão
+                  </Button>
                   <Button
                     type="button"
                     variant="ghost"
@@ -580,14 +624,24 @@ function AdminPage() {
                 />
               </Field>
               <Field label="URL da imagem">
-                <input
-                  type="url"
-                  value={draft.image_url ?? ""}
-                  onChange={(e) =>
-                    setDraft({ ...draft, image_url: e.target.value })
-                  }
-                  className={inputCls}
-                />
+                <div className="flex items-center gap-2">
+                  {draft.image_url && (
+                    <img
+                      src={draft.image_url}
+                      alt="Prévia"
+                      className="h-10 w-10 shrink-0 rounded-md border border-border object-cover"
+                    />
+                  )}
+                  <input
+                    type="url"
+                    value={draft.image_url ?? ""}
+                    onChange={(e) =>
+                      setDraft({ ...draft, image_url: e.target.value })
+                    }
+                    placeholder="https://down-br.img.susercontent.com/file/..."
+                    className={inputCls}
+                  />
+                </div>
               </Field>
               <Field label="Categoria">
                 <input
