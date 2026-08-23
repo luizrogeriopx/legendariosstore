@@ -14,6 +14,19 @@ export type ShopeeCredentials = {
   secret: string | null;
 };
 
+export type ShopeeProductOffer = {
+  itemId: string;
+  productName: string;
+  imageUrl: string;
+  price: number | null;
+  priceMin: number | null;
+  priceMax: number | null;
+  offerLink?: string | null;
+  ratingStar?: number | null;
+  sales?: number | null;
+  shopName?: string | null;
+};
+
 /**
  * Follow redirects to find the canonical Shopee product URL
  */
@@ -33,6 +46,52 @@ export async function resolveShopeeUrl(url: string): Promise<string> {
   } catch {
     return url;
   }
+}
+
+/**
+ * Extract slug name, shopId, and itemId from Shopee product URL
+ */
+export function extractShopeeParams(url: string): {
+  slug: string | null;
+  shopId: string | null;
+  itemId: string | null;
+} {
+  try {
+    const u = new URL(url);
+    const pathname = u.pathname;
+
+    // Format 1: /slug-name-i.123456.789012
+    const m1 = pathname.match(/\/([^/]+)-i\.(\d+)\.(\d+)/);
+    if (m1) {
+      const slug = decodeURIComponent(m1[1]).replace(/-/g, " ");
+      return {
+        slug: slug.charAt(0).toUpperCase() + slug.slice(1),
+        shopId: m1[2],
+        itemId: m1[3],
+      };
+    }
+
+    // Format 2: /product/123456/789012
+    const m2 = pathname.match(/\/product\/(\d+)\/(\d+)/);
+    if (m2) {
+      return {
+        slug: null,
+        shopId: m2[1],
+        itemId: m2[2],
+      };
+    }
+
+    // Format 3: -i.123456.789012
+    const m3 = pathname.match(/-i\.(\d+)\.(\d+)/);
+    if (m3) {
+      return {
+        slug: null,
+        shopId: m3[1],
+        itemId: m3[2],
+      };
+    }
+  } catch {}
+  return { slug: null, shopId: null, itemId: null };
 }
 
 /**
@@ -196,4 +255,110 @@ export async function generateShopeeAffiliateLink({
     shortLink: null,
     error: lastError || "Não foi possível gerar o link de afiliado oficial.",
   };
+}
+
+/**
+ * Query Shopee Affiliate Open API productOfferV2 for official product info (image, title, price, rating, sold)
+ */
+export async function fetchShopeeProductOffer({
+  itemId,
+  keyword,
+  appId,
+  secret,
+}: {
+  itemId?: string | null;
+  keyword?: string | null;
+  appId: string;
+  secret: string;
+}): Promise<ShopeeProductOffer | null> {
+  const cleanAppId = appId.trim();
+  const cleanSecret = secret.trim();
+
+  if (!cleanAppId || !cleanSecret) return null;
+
+  const endpoints = [
+    "https://open-api.affiliate.shopee.com.br/graphql",
+    "https://open-api.affiliate.shopee.com/graphql",
+  ];
+
+  const searchTerms = [
+    itemId ? String(itemId) : null,
+    keyword ? keyword.trim() : null,
+  ].filter(Boolean) as string[];
+
+  for (const term of searchTerms) {
+    const payloadObj = {
+      query: `query SearchOffer($keyword: String, $page: Int, $limit: Int) {
+  productOfferV2(keyword: $keyword, page: $page, limit: $limit) {
+    nodes {
+      itemId
+      productName
+      productLink
+      offerLink
+      imageUrl
+      priceMin
+      priceMax
+      price
+      ratingStar
+      sales
+      shopName
+    }
+  }
+}`,
+      variables: {
+        keyword: term,
+        page: 1,
+        limit: 10,
+      },
+    };
+
+    for (const endpoint of endpoints) {
+      try {
+        const timestamp = Math.floor(Date.now() / 1000);
+        const payload = JSON.stringify(payloadObj);
+        const factor = `${cleanAppId}${timestamp}${payload}${cleanSecret}`;
+        const signature = await sha256Hex(factor);
+
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `SHA256 Credential=${cleanAppId}, Timestamp=${timestamp}, Signature=${signature}`,
+          },
+          body: payload,
+        });
+
+        if (response.ok) {
+          const json = (await response.json()) as any;
+          const nodes = json?.data?.productOfferV2?.nodes;
+          if (Array.isArray(nodes) && nodes.length > 0) {
+            let found = itemId
+              ? nodes.find((n: any) => String(n.itemId) === String(itemId))
+              : null;
+            if (!found) found = nodes[0];
+
+            if (found) {
+              const p = parseFloat(found.price || found.priceMin || found.priceMax || 0);
+              return {
+                itemId: String(found.itemId),
+                productName: found.productName,
+                imageUrl: found.imageUrl,
+                price: p > 0 ? p : null,
+                priceMin: found.priceMin ? parseFloat(found.priceMin) : null,
+                priceMax: found.priceMax ? parseFloat(found.priceMax) : null,
+                offerLink: found.offerLink || null,
+                ratingStar: found.ratingStar ? parseFloat(found.ratingStar) : null,
+                sales: found.sales ? parseInt(found.sales, 10) : null,
+                shopName: found.shopName || null,
+              };
+            }
+          }
+        }
+      } catch {
+        // Continue to next endpoint/term
+      }
+    }
+  }
+
+  return null;
 }

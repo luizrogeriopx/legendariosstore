@@ -237,6 +237,11 @@ function AdminPage() {
         image_url: meta.image ?? d.image_url,
         description: meta.description ?? d.description,
         price: meta.price ?? d.price,
+        original_price: meta.original_price ?? d.original_price,
+        discount_pct: meta.discount_pct ?? d.discount_pct,
+        rating: meta.rating ?? d.rating,
+        sold_count: meta.sold_count ?? d.sold_count,
+        category: meta.category ?? d.category,
       }));
 
       if (meta.isOfficialLink) {

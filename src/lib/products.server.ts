@@ -140,6 +140,11 @@ export type ShopeeMeta = {
   image: string | null;
   description: string | null;
   price: number | null;
+  original_price?: number | null;
+  discount_pct?: number | null;
+  rating?: number | null;
+  sold_count?: number | null;
+  category?: string | null;
   affiliateUrl: string | null;
   isOfficialLink: boolean;
   apiError?: string | null;
@@ -168,26 +173,16 @@ import {
   getShopeeCredentials,
   generateShopeeAffiliateLink,
   resolveShopeeUrl,
+  extractShopeeParams,
+  fetchShopeeProductOffer,
 } from "./shopee-api.server";
-
-function parseTitleFromSlug(url: string): string | null {
-  try {
-    const u = new URL(url);
-    const pathname = u.pathname;
-    const match = pathname.match(/\/([^/]+)-i\.\d+\.\d+/);
-    if (match && match[1]) {
-      const decoded = decodeURIComponent(match[1]).replace(/-/g, " ");
-      return decoded.charAt(0).toUpperCase() + decoded.slice(1);
-    }
-  } catch {}
-  return null;
-}
 
 /**
  * Best-effort Shopee product metadata scraper & affiliate link generator.
  * Fetches the product page HTML and extracts Open Graph tags, JSON-LD, and price.
- * When Shopee API credentials (AppID + Secret) are available, automatically generates
- * the user's official affiliate shortlink.
+ * When Shopee API credentials (AppID + Secret) are available, automatically queries the
+ * official Shopee Affiliate API for exact product images, prices, titles, ratings, and
+ * generates the user's official affiliate shortlink.
  */
 export async function fetchShopeeMeta(
   url: string,
@@ -210,30 +205,74 @@ export async function fetchShopeeMeta(
     if (creds.secret) secret = creds.secret;
   }
 
-  if (appId && secret) {
-    const linkResult = await generateShopeeAffiliateLink({
-      url,
-      appId,
-      secret,
-    });
-    if (linkResult.shortLink) {
-      affiliateUrl = linkResult.shortLink;
-      isOfficialLink = true;
-    } else if (linkResult.error) {
-      apiError = linkResult.error;
-    }
-  }
-
   let canonicalUrl = url;
   try {
     canonicalUrl = await resolveShopeeUrl(url);
   } catch {}
 
-  let title: string | null = parseTitleFromSlug(canonicalUrl) || parseTitleFromSlug(url);
+  const { slug, itemId } = extractShopeeParams(canonicalUrl);
+
+  let title: string | null = slug || null;
   let image: string | null = null;
   let description: string | null = null;
   let price: number | null = null;
+  let original_price: number | null = null;
+  let discount_pct: number | null = null;
+  let rating: number | null = null;
+  let sold_count: number | null = null;
+  let category: string | null = null;
 
+  if (appId && secret) {
+    // 1. Generate official affiliate tracking link
+    try {
+      const linkResult = await generateShopeeAffiliateLink({
+        url: canonicalUrl,
+        appId,
+        secret,
+      });
+      if (linkResult.shortLink) {
+        affiliateUrl = linkResult.shortLink;
+        isOfficialLink = true;
+      } else if (linkResult.error) {
+        apiError = linkResult.error;
+      }
+    } catch (e) {
+      apiError = e instanceof Error ? e.message : "Erro ao gerar link de afiliado";
+    }
+
+    // 2. Query official Shopee product offer data (image, price, title, rating, sales)
+    try {
+      const offer = await fetchShopeeProductOffer({
+        itemId,
+        keyword: slug,
+        appId,
+        secret,
+      });
+
+      if (offer) {
+        if (offer.productName) title = offer.productName;
+        if (offer.imageUrl) image = offer.imageUrl;
+        if (offer.price) price = offer.price;
+        if (offer.priceMax && offer.price && offer.priceMax > offer.price) {
+          original_price = offer.priceMax;
+          discount_pct = Math.round(
+            ((offer.priceMax - offer.price) / offer.priceMax) * 100,
+          );
+        }
+        if (offer.ratingStar) rating = offer.ratingStar;
+        if (offer.sales) sold_count = offer.sales;
+        if (offer.shopName) category = offer.shopName;
+        if (offer.offerLink && !isOfficialLink) {
+          affiliateUrl = offer.offerLink;
+          isOfficialLink = true;
+        }
+      }
+    } catch {
+      // Continue to HTML fallback
+    }
+  }
+
+  // 3. HTML fallback for meta tags
   try {
     const res = await fetch(canonicalUrl, {
       headers: {
@@ -250,30 +289,17 @@ export async function fetchShopeeMeta(
 
       const metaTitle =
         pickMeta(html, "og:title") ?? pickMeta(html, "twitter:title");
-      if (metaTitle) {
+      if (metaTitle && !metaTitle.includes("Ofertas incríveis") && !title) {
         title = metaTitle.replace(/\s*\|\s*Shopee\s*Brasil.*$/i, "").trim();
-      } else {
-        const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-        if (titleMatch && titleMatch[1]) {
-          title = titleMatch[1].replace(/\s*\|\s*Shopee\s*Brasil.*$/i, "").trim();
-        }
       }
 
-      image =
-        pickMeta(html, "og:image") ?? pickMeta(html, "twitter:image") ?? null;
-      description = pickMeta(html, "og:description") ?? null;
-
-      // Extract JSON-LD if available
-      try {
-        const jsonLdMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/i);
-        if (jsonLdMatch && jsonLdMatch[1]) {
-          const ldData = JSON.parse(jsonLdMatch[1]);
-          if (ldData?.name && !title) title = ldData.name;
-          if (ldData?.image && !image) image = Array.isArray(ldData.image) ? ldData.image[0] : ldData.image;
-          if (ldData?.offers?.price && !price) price = Number(ldData.offers.price);
-          if (ldData?.description && !description) description = ldData.description;
-        }
-      } catch {}
+      if (!image) {
+        image =
+          pickMeta(html, "og:image") ?? pickMeta(html, "twitter:image") ?? null;
+      }
+      if (!description) {
+        description = pickMeta(html, "og:description") ?? null;
+      }
 
       const metaPrice = pickMeta(html, "product:price:amount");
       if (metaPrice && !price) {
@@ -294,14 +320,19 @@ export async function fetchShopeeMeta(
       }
     }
   } catch {
-    // Keep fallback title from slug
+    // Keep gathered data
   }
 
   return {
-    title,
+    title: title || "Produto Shopee",
     image,
     description,
     price,
+    original_price,
+    discount_pct,
+    rating,
+    sold_count,
+    category,
     affiliateUrl,
     isOfficialLink,
     apiError,
