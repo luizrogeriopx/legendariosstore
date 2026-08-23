@@ -10,6 +10,8 @@ import {
   createProduct,
   updateProduct,
   deleteProduct,
+  renameCategory,
+  deleteCategory,
   fetchShopeeMeta,
   saveShopeeSettings,
   importProductsBatch,
@@ -194,6 +196,35 @@ export const removeProduct = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     await deleteProduct(data.id, context.supabase);
     return { ok: true };
+  });
+
+export const renameCategoryFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator(
+    (data) =>
+      z
+        .object({
+          oldCategory: z.string().min(1, "Categoria original é obrigatória"),
+          newCategory: z.string().trim().min(1, "Novo nome é obrigatório").max(80),
+        })
+        .parse(data),
+  )
+  .handler(async ({ data, context }) => {
+    return renameCategory(data.oldCategory, data.newCategory, context.supabase);
+  });
+
+export const deleteCategoryFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator(
+    (data) =>
+      z
+        .object({
+          category: z.string().min(1, "Nome da categoria é obrigatório"),
+        })
+        .parse(data),
+  )
+  .handler(async ({ data, context }) => {
+    return deleteCategory(data.category, context.supabase);
   });
 
 // ---- Browse Shopee Catalog (admin only) ----

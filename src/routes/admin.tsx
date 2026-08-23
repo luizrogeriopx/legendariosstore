@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   Loader2,
   Plus,
@@ -32,6 +32,11 @@ import {
   Copy,
   FileSpreadsheet,
   Zap,
+  Tag,
+  Check,
+  X,
+  FolderPlus,
+  SlidersHorizontal,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useServerFn } from "@tanstack/react-start";
@@ -40,6 +45,14 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { SiteHeader } from "@/components/site-header";
 import { ProductCard } from "@/components/product-card";
 import { formatBRL } from "@/lib/format";
@@ -49,6 +62,8 @@ import {
   addProduct,
   editProduct,
   removeProduct,
+  renameCategoryFn,
+  deleteCategoryFn,
   scrapeShopee,
   getShopeeSettings,
   saveShopeeSettingsFn,
@@ -108,6 +123,8 @@ function AdminPage() {
   const addProductFn = useServerFn(addProduct);
   const editProductFn = useServerFn(editProduct);
   const removeProductFn = useServerFn(removeProduct);
+  const renameCategoryFnCall = useServerFn(renameCategoryFn);
+  const deleteCategoryFnCall = useServerFn(deleteCategoryFn);
   const scrapeShopeeFn = useServerFn(scrapeShopee);
   const getShopeeSettingsFn = useServerFn(getShopeeSettings);
   const saveShopeeSettingsFnCall = useServerFn(saveShopeeSettingsFn);
@@ -121,6 +138,26 @@ function AdminPage() {
   const [bulkSyncCount, setBulkSyncCount] = useState(50);
   const [bulkSyncSort, setBulkSyncSort] = useState(2);
   const [bulkSyncKeyword, setBulkSyncKeyword] = useState("");
+
+  // Category Management State
+  const CATEGORIES_STORAGE_KEY = "shopee_custom_categories_v1";
+  const [showCategoriesModal, setShowCategoriesModal] = useState(false);
+  const [newCategoryInput, setNewCategoryInput] = useState("");
+  const [editingCategoryOldName, setEditingCategoryOldName] = useState<string | null>(null);
+  const [editingCategoryNewName, setEditingCategoryNewName] = useState("");
+  const [savingCategory, setSavingCategory] = useState(false);
+  const [customCategories, setCustomCategories] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem("shopee_custom_categories_v1");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Vitrine Search & Category Filtering
+  const [vitrineSearch, setVitrineSearch] = useState("");
+  const [vitrineCategoryFilter, setVitrineCategoryFilter] = useState<string | null>(null);
 
   const userQuery = useQuery({
     queryKey: ["current-user"],
@@ -199,10 +236,137 @@ function AdminPage() {
   const [scraping, setScraping] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const products = useMemo(() => productsQuery.data?.products ?? [], [productsQuery.data?.products]);
+
+  // Category counts from existing products
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    products.forEach((p) => {
+      if (p.category?.trim()) {
+        counts[p.category.trim()] = (counts[p.category.trim()] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [products]);
+
+  // All unique categories (from products + custom + defaults)
+  const allCategories = useMemo(() => {
+    const set = new Set<string>();
+    CATEGORY_QUICK_SEARCH.filter((c) => c !== "Todos").forEach((c) => set.add(c));
+    customCategories.forEach((c) => {
+      if (c.trim()) set.add(c.trim());
+    });
+    products.forEach((p) => {
+      if (p.category?.trim()) set.add(p.category.trim());
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [products, customCategories]);
+
+  // Vitrine search + category filter memo
+  const filteredVitrineProducts = useMemo(() => {
+    return products.filter((p) => {
+      const matchesCat = !vitrineCategoryFilter || p.category === vitrineCategoryFilter;
+      const matchesSearch =
+        !vitrineSearch ||
+        p.title.toLowerCase().includes(vitrineSearch.toLowerCase()) ||
+        (p.description ?? "").toLowerCase().includes(vitrineSearch.toLowerCase()) ||
+        (p.category ?? "").toLowerCase().includes(vitrineSearch.toLowerCase());
+      return matchesCat && matchesSearch;
+    });
+  }, [products, vitrineCategoryFilter, vitrineSearch]);
+
   const hasApiCredentials = Boolean(
     (appIdInput.trim() || shopeeSettingsQuery.data?.appId) &&
     (secretInput.trim() || savedSecret || shopeeSettingsQuery.data?.hasSecret),
   );
+
+  function handleAddCategory(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = newCategoryInput.trim();
+    if (!trimmed) return;
+    if (allCategories.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
+      toast.error("Esta categoria já existe.");
+      return;
+    }
+    const updated = Array.from(new Set([...customCategories, trimmed]));
+    setCustomCategories(updated);
+    try {
+      localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(updated));
+    } catch {}
+    setNewCategoryInput("");
+    toast.success(`Categoria "${trimmed}" adicionada com sucesso!`);
+  }
+
+  async function handleRenameCategory(oldCat: string) {
+    const trimmedNew = editingCategoryNewName.trim();
+    if (!trimmedNew) {
+      toast.error("O nome da categoria não pode ficar vazio.");
+      return;
+    }
+    if (trimmedNew.toLowerCase() === oldCat.toLowerCase()) {
+      setEditingCategoryOldName(null);
+      return;
+    }
+    setSavingCategory(true);
+    try {
+      await renameCategoryFnCall({
+        data: { oldCategory: oldCat, newCategory: trimmedNew },
+      });
+
+      const updatedCustom = customCategories.map((c) => (c === oldCat ? trimmedNew : c));
+      if (!updatedCustom.includes(trimmedNew)) updatedCustom.push(trimmedNew);
+      setCustomCategories(updatedCustom);
+      try {
+        localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(updatedCustom));
+      } catch {}
+
+      if (vitrineCategoryFilter === oldCat) {
+        setVitrineCategoryFilter(trimmedNew);
+      }
+
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success(`Categoria renomeada de "${oldCat}" para "${trimmedNew}"!`);
+      setEditingCategoryOldName(null);
+      setEditingCategoryNewName("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erro ao renomear categoria.");
+    } finally {
+      setSavingCategory(false);
+    }
+  }
+
+  async function handleDeleteCategory(cat: string) {
+    const count = categoryCounts[cat] || 0;
+    const msg =
+      count > 0
+        ? `Deseja excluir a categoria "${cat}"? ${count} produto(s) vinculado(s) ficarão sem categoria.`
+        : `Deseja excluir a categoria "${cat}"?`;
+
+    if (!confirm(msg)) return;
+
+    setSavingCategory(true);
+    try {
+      if (count > 0) {
+        await deleteCategoryFnCall({ data: { category: cat } });
+      }
+      const updatedCustom = customCategories.filter((c) => c !== cat);
+      setCustomCategories(updatedCustom);
+      try {
+        localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(updatedCustom));
+      } catch {}
+
+      if (vitrineCategoryFilter === cat) {
+        setVitrineCategoryFilter(null);
+      }
+
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success(`Categoria "${cat}" removida.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erro ao excluir categoria.");
+    } finally {
+      setSavingCategory(false);
+    }
+  }
 
   if (userQuery.isLoading) {
     return (
@@ -219,8 +383,6 @@ function AdminPage() {
       </div>
     );
   }
-
-  const products = productsQuery.data?.products ?? [];
 
   async function handleSaveSettings(e: React.FormEvent) {
     e.preventDefault();
@@ -739,6 +901,16 @@ function AdminPage() {
             <Button
               variant="outline"
               size="sm"
+              onClick={() => setShowCategoriesModal(true)}
+              className="border-primary/50 text-foreground hover:bg-primary/10"
+              title="Gerenciar, criar e alterar categorias de produtos"
+            >
+              <Layers className="mr-1.5 h-4 w-4 text-primary" />
+              Categorias ({allCategories.length})
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setShowBulkSyncModal(true)}
               className="border-primary/50 text-foreground hover:bg-primary/10"
             >
@@ -1140,20 +1312,48 @@ function AdminPage() {
               </p>
             </Card>
 
-            {showForm && (
-              <Card className="mb-6 p-4">
-                <form onSubmit={save} className="grid gap-4 sm:grid-cols-2">
-                  <Field label="Título" full>
+            {/* Product Edit / Add Overlay Modal Dialog */}
+            <Dialog
+              open={showForm}
+              onOpenChange={(open) => {
+                if (!open) {
+                  resetForm();
+                } else {
+                  setShowForm(true);
+                }
+              }}
+            >
+              <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto p-6">
+                <DialogHeader>
+                  <DialogTitle className="text-xl font-bold flex items-center gap-2 text-foreground">
+                    {editingId ? (
+                      <Pencil className="h-5 w-5 text-primary" />
+                    ) : (
+                      <Plus className="h-5 w-5 text-primary" />
+                    )}
+                    {editingId ? "Editar Produto da Vitrine" : "Adicionar Novo Produto"}
+                  </DialogTitle>
+                  <DialogDescription>
+                    {editingId
+                      ? "Modifique os detalhes, fotos, valores ou categoria deste produto."
+                      : "Preencha as informações do produto para disponibilizá-lo em sua vitrine."}
+                  </DialogDescription>
+                </DialogHeader>
+
+                <form onSubmit={save} className="grid gap-4 sm:grid-cols-2 pt-2">
+                  <Field label="Título do Produto" full>
                     <input
                       required
                       value={draft.title}
                       onChange={(e) =>
                         setDraft({ ...draft, title: e.target.value })
                       }
+                      placeholder="Ex: Fone de Ouvido Bluetooth Sem Fio..."
                       className={inputCls}
                     />
                   </Field>
-                  <Field label="Link da Shopee (afiliado)" full>
+
+                  <Field label="Link de Afiliado Shopee" full>
                     <input
                       required
                       type="url"
@@ -1161,16 +1361,18 @@ function AdminPage() {
                       onChange={(e) =>
                         setDraft({ ...draft, shopee_url: e.target.value })
                       }
+                      placeholder="https://s.shopee.com.br/... ou link da Shopee"
                       className={inputCls}
                     />
                   </Field>
-                  <Field label="URL da imagem">
+
+                  <Field label="URL da Imagem">
                     <div className="flex items-center gap-2">
                       {draft.image_url && (
                         <img
                           src={draft.image_url}
                           alt="Prévia"
-                          className="h-10 w-10 shrink-0 rounded-md border border-border object-cover"
+                          className="h-10 w-10 shrink-0 rounded-md border border-border object-cover bg-secondary"
                         />
                       )}
                       <input
@@ -1184,45 +1386,102 @@ function AdminPage() {
                       />
                     </div>
                   </Field>
+
                   <Field label="Categoria">
-                    <input
-                      value={draft.category ?? ""}
-                      onChange={(e) =>
-                        setDraft({ ...draft, category: e.target.value })
-                      }
-                      className={inputCls}
-                    />
+                    <div className="space-y-1.5">
+                      <div className="flex gap-1.5">
+                        <div className="relative flex-1">
+                          <input
+                            list="product-form-categories-list"
+                            value={draft.category ?? ""}
+                            onChange={(e) =>
+                              setDraft({ ...draft, category: e.target.value })
+                            }
+                            placeholder="Selecione ou digite uma categoria..."
+                            className={inputCls}
+                          />
+                          <datalist id="product-form-categories-list">
+                            {allCategories.map((c) => (
+                              <option key={c} value={c} />
+                            ))}
+                          </datalist>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setShowCategoriesModal(true)}
+                          title="Gerenciar Categorias"
+                          className="shrink-0"
+                        >
+                          <Layers className="h-4 w-4" />
+                        </Button>
+                      </div>
+
+                      {/* Quick category badges */}
+                      <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto">
+                        {allCategories.slice(0, 8).map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => setDraft({ ...draft, category: c })}
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition border ${
+                              draft.category === c
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "bg-secondary/60 text-muted-foreground border-border hover:bg-secondary hover:text-foreground"
+                            }`}
+                          >
+                            {c}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </Field>
-                  <Field label="Preço (R$)">
+
+                  <Field label="Preço Promocional (R$)">
                     <input
                       type="number"
                       step="0.01"
                       value={draft.price ?? ""}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const priceVal = e.target.value ? Number(e.target.value) : null;
+                        let disc = draft.discount_pct;
+                        if (priceVal != null && draft.original_price && draft.original_price > priceVal) {
+                          disc = Math.round(((draft.original_price - priceVal) / draft.original_price) * 100);
+                        }
                         setDraft({
                           ...draft,
-                          price: e.target.value ? Number(e.target.value) : null,
-                        })
-                      }
+                          price: priceVal,
+                          discount_pct: disc,
+                        });
+                      }}
+                      placeholder="Ex: 89.90"
                       className={inputCls}
                     />
                   </Field>
-                  <Field label="Preço original (R$)">
+
+                  <Field label="Preço Original (R$)">
                     <input
                       type="number"
                       step="0.01"
                       value={draft.original_price ?? ""}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const origVal = e.target.value ? Number(e.target.value) : null;
+                        let disc = draft.discount_pct;
+                        if (origVal != null && draft.price && origVal > draft.price) {
+                          disc = Math.round(((origVal - draft.price) / origVal) * 100);
+                        }
                         setDraft({
                           ...draft,
-                          original_price: e.target.value
-                            ? Number(e.target.value)
-                            : null,
-                        })
-                      }
+                          original_price: origVal,
+                          discount_pct: disc,
+                        });
+                      }}
+                      placeholder="Ex: 199.90"
                       className={inputCls}
                     />
                   </Field>
+
                   <Field label="Desconto (%)">
                     <input
                       type="number"
@@ -1235,10 +1494,12 @@ function AdminPage() {
                             : null,
                         })
                       }
+                      placeholder="Ex: 45"
                       className={inputCls}
                     />
                   </Field>
-                  <Field label="Avaliação (0-5)">
+
+                  <Field label="Avaliação (0 a 5 ⭐)">
                     <input
                       type="number"
                       step="0.1"
@@ -1251,9 +1512,11 @@ function AdminPage() {
                           rating: e.target.value ? Number(e.target.value) : null,
                         })
                       }
+                      placeholder="Ex: 4.8"
                       className={inputCls}
                     />
                   </Field>
+
                   <Field label="Vendidos">
                     <input
                       type="number"
@@ -1264,47 +1527,288 @@ function AdminPage() {
                           sold_count: Number(e.target.value),
                         })
                       }
+                      placeholder="Ex: 1250"
                       className={inputCls}
                     />
                   </Field>
-                  <Field label="Descrição" full>
+
+                  <Field label="Descrição / Destaques" full>
                     <textarea
-                      rows={2}
+                      rows={3}
                       value={draft.description ?? ""}
                       onChange={(e) =>
                         setDraft({ ...draft, description: e.target.value })
                       }
+                      placeholder="Principais benefícios e informações do produto..."
                       className={inputCls}
                     />
                   </Field>
-                  <label className="flex items-center gap-2 text-sm text-foreground sm:col-span-2">
+
+                  <label className="flex items-center gap-2 text-sm text-foreground sm:col-span-2 cursor-pointer pt-1">
                     <input
                       type="checkbox"
                       checked={!!draft.featured}
                       onChange={(e) =>
                         setDraft({ ...draft, featured: e.target.checked })
                       }
-                      className="h-4 w-4 accent-[var(--primary)]"
+                      className="h-4 w-4 accent-[var(--primary)] rounded cursor-pointer"
                     />
-                    Destacar na vitrine (Top)
+                    <span className="font-medium">Destacar no Topo da vitrine</span>
                   </label>
 
-                  <div className="flex gap-2 sm:col-span-2">
+                  <DialogFooter className="flex gap-2 sm:col-span-2 pt-3 border-t border-border">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={resetForm}
+                      disabled={saving}
+                    >
+                      Cancelar
+                    </Button>
                     <Button
                       type="submit"
                       disabled={saving}
-                      className="shopee-gradient text-primary-foreground"
+                      className="shopee-gradient text-primary-foreground font-semibold"
                     >
                       {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       {editingId ? "Salvar alterações" : "Adicionar produto"}
                     </Button>
-                    <Button type="button" variant="outline" onClick={resetForm}>
-                      Cancelar
-                    </Button>
-                  </div>
+                  </DialogFooter>
                 </form>
-              </Card>
-            )}
+              </DialogContent>
+            </Dialog>
+
+            {/* Category Manager Overlay Modal Dialog */}
+            <Dialog open={showCategoriesModal} onOpenChange={setShowCategoriesModal}>
+              <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto p-6">
+                <DialogHeader>
+                  <DialogTitle className="text-xl font-bold flex items-center gap-2 text-foreground">
+                    <Layers className="h-5 w-5 text-primary" />
+                    Gerenciar Categorias
+                  </DialogTitle>
+                  <DialogDescription>
+                    Crie novas categorias, altere nomes existentes ou remova categorias. As alterações são refletidas instantaneamente nos produtos.
+                  </DialogDescription>
+                </DialogHeader>
+
+                {/* Form to create new category */}
+                <form onSubmit={handleAddCategory} className="flex gap-2 pt-2">
+                  <input
+                    type="text"
+                    value={newCategoryInput}
+                    onChange={(e) => setNewCategoryInput(e.target.value)}
+                    placeholder="Nova categoria (ex: Casa & Decoração)..."
+                    className={inputCls}
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={!newCategoryInput.trim()}
+                    className="shopee-gradient text-primary-foreground shrink-0"
+                  >
+                    <Plus className="mr-1.5 h-4 w-4" />
+                    Criar Categoria
+                  </Button>
+                </form>
+
+                {/* Category List */}
+                <div className="mt-4 space-y-2">
+                  <div className="flex items-center justify-between pb-1 text-xs font-semibold text-muted-foreground border-b border-border">
+                    <span>Categoria ({allCategories.length})</span>
+                    <span>Ações</span>
+                  </div>
+
+                  {allCategories.length === 0 ? (
+                    <p className="text-center py-6 text-xs text-muted-foreground">
+                      Nenhuma categoria disponível.
+                    </p>
+                  ) : (
+                    allCategories.map((cat) => {
+                      const count = categoryCounts[cat] || 0;
+                      const isEditingThis = editingCategoryOldName === cat;
+
+                      return (
+                        <div
+                          key={cat}
+                          className="flex items-center justify-between gap-2 p-2.5 rounded-lg border border-border/80 bg-card hover:border-primary/40 transition"
+                        >
+                          {isEditingThis ? (
+                            <div className="flex flex-1 items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={editingCategoryNewName}
+                                onChange={(e) =>
+                                  setEditingCategoryNewName(e.target.value)
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    handleRenameCategory(cat);
+                                  } else if (e.key === "Escape") {
+                                    setEditingCategoryOldName(null);
+                                  }
+                                }}
+                                autoFocus
+                                className={inputCls + " py-1 h-8 text-xs"}
+                              />
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={savingCategory || !editingCategoryNewName.trim()}
+                                onClick={() => handleRenameCategory(cat)}
+                                className="h-8 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+                                title="Salvar novo nome"
+                              >
+                                {savingCategory ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Check className="h-3.5 w-3.5" />
+                                )}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                disabled={savingCategory}
+                                onClick={() => setEditingCategoryOldName(null)}
+                                className="h-8 px-2"
+                                title="Cancelar edição"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Tag className="h-3.5 w-3.5 text-primary shrink-0" />
+                                <span className="text-sm font-medium text-foreground truncate">
+                                  {cat}
+                                </span>
+                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">
+                                  {count} {count === 1 ? "produto" : "produtos"}
+                                </Badge>
+                              </div>
+
+                              <div className="flex items-center gap-1 shrink-0">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setEditingCategoryOldName(cat);
+                                    setEditingCategoryNewName(cat);
+                                  }}
+                                  className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                  title="Alterar / Renomear categoria"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={savingCategory}
+                                  onClick={() => handleDeleteCategory(cat)}
+                                  className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
+                                  title="Excluir categoria"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                <DialogFooter className="mt-4 pt-2 border-t border-border">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setShowCategoriesModal(false)}
+                  >
+                    Fechar
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Vitrine Filters: Search & Category Pills */}
+            <div className="mb-5 space-y-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="relative flex-1 max-w-md">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    type="text"
+                    value={vitrineSearch}
+                    onChange={(e) => setVitrineSearch(e.target.value)}
+                    placeholder="Filtrar por nome, categoria ou descrição..."
+                    className="w-full rounded-lg border border-input bg-card py-2 pl-9 pr-8 text-sm text-foreground outline-none ring-ring transition focus:border-primary focus:ring-2 focus:ring-primary/30"
+                  />
+                  {vitrineSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setVitrineSearch("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-xs"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    Exibindo {filteredVitrineProducts.length} de {products.length} produtos
+                  </span>
+                </div>
+              </div>
+
+              {/* Category Filter Pills */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setVitrineCategoryFilter(null)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                    vitrineCategoryFilter === null
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "bg-secondary/70 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                  }`}
+                >
+                  Todos ({products.length})
+                </button>
+                {allCategories.map((cat) => {
+                  const count = categoryCounts[cat] || 0;
+                  if (count === 0 && vitrineCategoryFilter !== cat) return null;
+                  const isSelected = vitrineCategoryFilter === cat;
+
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setVitrineCategoryFilter(isSelected ? null : cat)}
+                      className={`rounded-full px-3 py-1 text-xs font-medium transition flex items-center gap-1.5 ${
+                        isSelected
+                          ? "bg-primary text-primary-foreground shadow-sm"
+                          : "bg-secondary/70 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                      }`}
+                    >
+                      <span>{cat}</span>
+                      <span
+                        className={`text-[10px] px-1 rounded-full ${
+                          isSelected
+                            ? "bg-primary-foreground/20 text-primary-foreground"
+                            : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             {/* Product list */}
             <div className="space-y-3">
@@ -1329,8 +1833,28 @@ function AdminPage() {
                     Explorar Catálogo Shopee
                   </Button>
                 </div>
+              ) : filteredVitrineProducts.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-border p-8 text-center">
+                  <Search className="mx-auto mb-2 h-8 w-8 text-muted-foreground/60" />
+                  <p className="font-semibold text-foreground text-sm">
+                    Nenhum produto encontrado com os filtros atuais
+                  </p>
+                  <p className="mb-3 text-xs text-muted-foreground">
+                    Tente buscar por outro termo ou limpar o filtro de categoria.
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setVitrineSearch("");
+                      setVitrineCategoryFilter(null);
+                    }}
+                  >
+                    Limpar Filtros
+                  </Button>
+                </div>
               ) : (
-                products.map((p) => (
+                filteredVitrineProducts.map((p) => (
                   <Card
                     key={p.id}
                     className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
@@ -1380,6 +1904,7 @@ function AdminPage() {
                         size="sm"
                         variant="outline"
                         onClick={() => startEdit(p)}
+                        title="Editar produto"
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </Button>
@@ -1388,6 +1913,7 @@ function AdminPage() {
                         variant="outline"
                         className="text-destructive hover:bg-destructive/10"
                         onClick={() => remove(p.id)}
+                        title="Remover produto"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

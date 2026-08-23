@@ -150,6 +150,31 @@ export async function deleteProduct(id: string, supabase: AuthedClient) {
   if (error) throw new Error(error.message);
 }
 
+export async function renameCategory(
+  oldCategory: string,
+  newCategory: string,
+  supabase: AuthedClient,
+) {
+  const { error } = await supabase
+    .from("products")
+    .update({ category: newCategory })
+    .eq("category", oldCategory);
+  if (error) throw new Error(error.message);
+  return { ok: true };
+}
+
+export async function deleteCategory(
+  category: string,
+  supabase: AuthedClient,
+) {
+  const { error } = await supabase
+    .from("products")
+    .update({ category: null })
+    .eq("category", category);
+  if (error) throw new Error(error.message);
+  return { ok: true };
+}
+
 export async function importProductsBatch(
   products: ProductInput[],
   userId: string,
