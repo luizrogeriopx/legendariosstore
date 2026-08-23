@@ -9,10 +9,12 @@ import {
   updateProduct,
   deleteProduct,
   fetchShopeeMeta,
+  saveShopeeSettings,
   type Product,
   type ProductInput,
   type ShopeeMeta,
 } from "./products.server";
+import { getShopeeCredentials } from "./shopee-api.server";
 
 export const productSchema = z.object({
   title: z.string().min(2).max(200),
@@ -45,12 +47,40 @@ export const getProducts = createServerFn({ method: "GET" }).handler(
   },
 );
 
-// ---- Scrape Shopee link (admin only) ----
+// ---- Scrape Shopee link + generate official affiliate short link (admin only) ----
 export const scrapeShopee = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data) => z.object({ url: z.string().url() }).parse(data))
-  .handler(async ({ data }): Promise<ShopeeMeta> => {
-    return fetchShopeeMeta(data.url);
+  .handler(async ({ data, context }): Promise<ShopeeMeta> => {
+    return fetchShopeeMeta(data.url, context.supabase);
+  });
+
+// ---- Shopee API Settings (admin only) ----
+export const getShopeeSettings = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const creds = await getShopeeCredentials(context.supabase);
+    return {
+      appId: creds.appId || "",
+      hasSecret: Boolean(creds.secret),
+      maskedSecret: creds.secret
+        ? creds.secret.slice(0, 4) + "••••••••" + creds.secret.slice(-4)
+        : "",
+    };
+  });
+
+export const saveShopeeSettingsFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) =>
+    z
+      .object({
+        appId: z.string().trim().min(1, "App ID é obrigatório"),
+        secret: z.string().trim().min(1, "Chave Secreta é obrigatória"),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data, context }) => {
+    return saveShopeeSettings(data.appId, data.secret, context.supabase);
   });
 
 // ---- Current session + admin check ----

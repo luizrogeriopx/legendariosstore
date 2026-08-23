@@ -10,6 +10,14 @@ import {
   Star,
   ExternalLink,
   RefreshCw,
+  Key,
+  Settings,
+  ShieldCheck,
+  Eye,
+  EyeOff,
+  CheckCircle2,
+  AlertCircle,
+  Sparkles,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useServerFn } from "@tanstack/react-start";
@@ -28,6 +36,8 @@ import {
   editProduct,
   removeProduct,
   scrapeShopee,
+  getShopeeSettings,
+  saveShopeeSettingsFn,
 } from "@/lib/products.functions";
 import type { Product, ProductInput } from "@/lib/products.server";
 
@@ -68,6 +78,8 @@ function AdminPage() {
   const editProductFn = useServerFn(editProduct);
   const removeProductFn = useServerFn(removeProduct);
   const scrapeShopeeFn = useServerFn(scrapeShopee);
+  const getShopeeSettingsFn = useServerFn(getShopeeSettings);
+  const saveShopeeSettingsFnCall = useServerFn(saveShopeeSettingsFn);
 
   const userQuery = useQuery({
     queryKey: ["current-user"],
@@ -88,12 +100,35 @@ function AdminPage() {
     enabled: userQuery.data?.isAdmin,
   });
 
+  const shopeeSettingsQuery = useQuery({
+    queryKey: ["shopee-settings"],
+    queryFn: () => getShopeeSettingsFn(),
+    enabled: userQuery.data?.isAdmin,
+  });
+
+  const [showSettings, setShowSettings] = useState(false);
+  const [appIdInput, setAppIdInput] = useState("");
+  const [secretInput, setSecretInput] = useState("");
+  const [showSecret, setShowSecret] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  // Sync settings when loaded
+  useEffect(() => {
+    if (shopeeSettingsQuery.data?.appId) {
+      setAppIdInput(shopeeSettingsQuery.data.appId);
+    }
+  }, [shopeeSettingsQuery.data]);
+
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ProductInput>(emptyDraft);
   const [shopeeLink, setShopeeLink] = useState("");
   const [scraping, setScraping] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  const hasApiCredentials = Boolean(
+    shopeeSettingsQuery.data?.appId && shopeeSettingsQuery.data?.hasSecret,
+  );
 
   if (userQuery.isLoading) {
     return (
@@ -113,23 +148,68 @@ function AdminPage() {
 
   const products = productsQuery.data?.products ?? [];
 
+  async function handleSaveSettings(e: React.FormEvent) {
+    e.preventDefault();
+    if (!appIdInput.trim() || !secretInput.trim()) {
+      toast.error("Preencha o App ID e a Chave Secreta.");
+      return;
+    }
+    setSavingSettings(true);
+    try {
+      await saveShopeeSettingsFnCall({
+        data: { appId: appIdInput.trim(), secret: secretInput.trim() },
+      });
+      toast.success("Credenciais da API Shopee salvas com sucesso!");
+      setSecretInput("");
+      queryClient.invalidateQueries({ queryKey: ["shopee-settings"] });
+      setShowSettings(false);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Erro ao salvar credenciais.",
+      );
+    } finally {
+      setSavingSettings(false);
+    }
+  }
+
   async function scrape() {
     if (!shopeeLink) return;
     setScraping(true);
     try {
       const meta = await scrapeShopeeFn({ data: { url: shopeeLink } });
+      const finalUrl = meta.affiliateUrl || shopeeLink;
+
       setDraft((d) => ({
         ...d,
-        shopee_url: shopeeLink,
+        shopee_url: finalUrl,
         title: meta.title ?? d.title,
         image_url: meta.image ?? d.image_url,
         description: meta.description ?? d.description,
         price: meta.price ?? d.price,
       }));
-      toast.success("Dados importados do link!");
+
+      if (meta.isOfficialLink) {
+        toast.success(
+          "Produto importado e link de afiliado oficial gerado com sucesso!",
+        );
+      } else if (meta.apiError) {
+        toast.warning(
+          `Produto importado, mas a API Shopee retornou erro: ${meta.apiError}. Verifique seu AppID/Secret.`,
+        );
+      } else if (!hasApiCredentials) {
+        toast.info(
+          "Produto importado! Dica: configure suas credenciais da API Shopee para gerar links de afiliado automaticamente.",
+        );
+      } else {
+        toast.success("Dados importados com sucesso!");
+      }
       setShowForm(true);
-    } catch {
-      toast.error("Não consegui ler o link. Preencha manualmente.");
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Não consegui ler o link. Preencha manualmente.",
+      );
       setDraft((d) => ({ ...d, shopee_url: shopeeLink }));
       setShowForm(true);
     } finally {
@@ -216,7 +296,20 @@ function AdminPage() {
               {products.length} produtos na vitrine
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowSettings(!showSettings)}
+              className={
+                hasApiCredentials
+                  ? "border-emerald-500/40 text-foreground hover:bg-secondary"
+                  : "border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+              }
+            >
+              <Key className="mr-1.5 h-4 w-4" />
+              {hasApiCredentials ? "API Shopee Conectada" : "Configurar API Shopee"}
+            </Button>
             <Button variant="outline" size="sm" onClick={signOut}>
               <LogOut className="mr-1.5 h-4 w-4" /> Sair
             </Button>
@@ -233,18 +326,158 @@ function AdminPage() {
           </div>
         </div>
 
+        {/* Settings Card */}
+        {showSettings && (
+          <Card className="mb-6 border-primary/30 bg-card p-5 shadow-sm">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Key className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-foreground">
+                    Configurações da API Oficial Shopee Afiliados
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    Gera seus links oficiais de afiliado automaticamente ao colar qualquer link da Shopee.
+                  </p>
+                </div>
+              </div>
+              {hasApiCredentials ? (
+                <Badge className="border-0 bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400">
+                  <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Conectado
+                </Badge>
+              ) : (
+                <Badge
+                  variant="outline"
+                  className="border-amber-500/40 text-amber-600 dark:text-amber-400"
+                >
+                  <AlertCircle className="mr-1 h-3.5 w-3.5" /> Não configurado
+                </Badge>
+              )}
+            </div>
+
+            <form onSubmit={handleSaveSettings} className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-semibold text-foreground">
+                    App ID (Shopee Open API)
+                  </span>
+                  <input
+                    type="text"
+                    required
+                    value={appIdInput}
+                    onChange={(e) => setAppIdInput(e.target.value)}
+                    placeholder="Ex: 123456789"
+                    className={inputCls}
+                  />
+                </label>
+
+                <label className="block space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-foreground">
+                      Chave Secreta (Secret / Senha da API)
+                    </span>
+                    {shopeeSettingsQuery.data?.hasSecret && (
+                      <span className="text-[11px] text-muted-foreground">
+                        Atual: {shopeeSettingsQuery.data.maskedSecret}
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showSecret ? "text" : "password"}
+                      required
+                      value={secretInput}
+                      onChange={(e) => setSecretInput(e.target.value)}
+                      placeholder={
+                        shopeeSettingsQuery.data?.hasSecret
+                          ? "Digite a nova senha para atualizar"
+                          : "Cole sua chave secreta da Shopee"
+                      }
+                      className={inputCls + " pr-10"}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSecret(!showSecret)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      {showSecret ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </button>
+                  </div>
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <p className="text-xs text-muted-foreground">
+                  Obtenha suas credenciais no portal da Shopee em{" "}
+                  <a
+                    href="https://affiliate.shopee.com.br/open_api"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-0.5 text-primary underline"
+                  >
+                    affiliate.shopee.com.br/open_api{" "}
+                    <ExternalLink className="inline h-3 w-3" />
+                  </a>
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowSettings(false)}
+                  >
+                    Fechar
+                  </Button>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={savingSettings}
+                    className="shopee-gradient text-primary-foreground"
+                  >
+                    {savingSettings && (
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    )}
+                    Salvar Credenciais
+                  </Button>
+                </div>
+              </div>
+            </form>
+          </Card>
+        )}
+
         {/* Paste link box */}
         <Card className="mb-6 border-primary/20 bg-secondary/40 p-4">
-          <label className="mb-2 block text-sm font-semibold text-foreground">
-            Colar link da Shopee para importar
-          </label>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <label className="block text-sm font-semibold text-foreground">
+              Colar link da Shopee para importar produto
+            </label>
+            {hasApiCredentials ? (
+              <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                <Sparkles className="h-3.5 w-3.5" /> Geração de link de afiliado ativa
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowSettings(true)}
+                className="inline-flex items-center gap-1 text-xs text-amber-600 hover:underline dark:text-amber-400"
+              >
+                <AlertCircle className="h-3.5 w-3.5" /> Configurar AppID para gerar links automáticos
+              </button>
+            )}
+          </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <div className="relative flex-1">
               <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <input
                 value={shopeeLink}
                 onChange={(e) => setShopeeLink(e.target.value)}
-                placeholder="https://shopee.com.br/..."
+                placeholder="https://shopee.com.br/... ou link encurtado"
                 className="w-full rounded-lg border border-input bg-card py-2.5 pl-9 pr-3 text-sm text-foreground outline-none ring-ring transition focus:border-primary focus:ring-2 focus:ring-primary/30"
               />
             </div>
@@ -258,12 +491,11 @@ function AdminPage() {
               ) : (
                 <RefreshCw className="mr-1.5 h-4 w-4" />
               )}
-              Importar
+              Importar Produto
             </Button>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Importamos título, imagem e preço (quando disponível). Revise antes
-            de salvar.
+            Ao importar, buscamos automaticamente o título, imagem, preço e geramos o seu link de afiliado oficial.
           </p>
         </Card>
 
