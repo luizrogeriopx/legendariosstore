@@ -99,14 +99,15 @@ function AdminPage() {
   const productsQuery = useQuery({
     queryKey: ["products"],
     queryFn: () => getProducts(),
-    enabled: userQuery.data?.isAdmin,
+    enabled: userQuery.data?.isAdmin === true,
   });
 
   const shopeeSettingsQuery = useQuery({
     queryKey: ["shopee-settings"],
     queryFn: () => getShopeeSettingsFn(),
-    enabled: userQuery.data?.isAdmin,
+    enabled: userQuery.data?.isAdmin === true,
   });
+
 
   const LOCAL_STORAGE_KEY = "shopee_affiliate_creds_v1";
 
