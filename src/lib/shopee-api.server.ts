@@ -69,10 +69,10 @@ export function extractShopeeParams(url: string): {
 
     // Format 1: /slug-name-i.123456.789012
     const m1 = pathname.match(/\/([^/]+)-i\.(\d+)\.(\d+)/);
-    if (m1) {
+    if (m1 && m1[1] && m1[2] && m1[3]) {
       const slug = decodeURIComponent(m1[1]).replace(/-/g, " ").trim();
       return {
-        slug: slug.charAt(0).toUpperCase() + slug.slice(1),
+        slug: slug ? slug.charAt(0).toUpperCase() + slug.slice(1) : null,
         shopId: m1[2],
         itemId: m1[3],
       };
@@ -80,26 +80,45 @@ export function extractShopeeParams(url: string): {
 
     // Format 2: /product/123456/789012
     const m2 = pathname.match(/\/product\/(\d+)\/(\d+)/);
-    if (m2) {
-      return {
-        slug: null,
-        shopId: m2[1],
-        itemId: m2[2],
-      };
+    if (m2 && m2[1] && m2[2]) {
+      return { slug: null, shopId: m2[1], itemId: m2[2] };
     }
 
     // Format 3: -i.123456.789012 without leading slug
     const m3 = pathname.match(/-i\.(\d+)\.(\d+)/);
-    if (m3) {
-      return {
-        slug: null,
-        shopId: m3[1],
-        itemId: m3[2],
-      };
+    if (m3 && m3[1] && m3[2]) {
+      return { slug: null, shopId: m3[1], itemId: m3[2] };
     }
   } catch {}
   return { slug: null, shopId: null, itemId: null };
 }
+
+function mapOfferNode(match: any): ShopeeProductOffer {
+  const priceVal = parseFloat(
+    match.price || match.priceMin || match.priceMax || 0,
+  );
+  const pMax = match.priceMax ? parseFloat(match.priceMax) : null;
+  const pMin = match.priceMin ? parseFloat(match.priceMin) : null;
+  let discount_pct: number | null = null;
+  if (pMax && priceVal && pMax > priceVal) {
+    discount_pct = Math.round(((pMax - priceVal) / pMax) * 100);
+  }
+  return {
+    itemId: String(match.itemId),
+    productName: match.productName,
+    imageUrl: match.imageUrl,
+    price: priceVal > 0 ? priceVal : null,
+    priceMin: pMin,
+    priceMax: pMax,
+    discount_pct,
+    offerLink: match.offerLink || null,
+    ratingStar: match.ratingStar ? parseFloat(match.ratingStar) : null,
+    sales: match.sales ? parseInt(match.sales, 10) : null,
+    shopName: match.shopName || null,
+    commissionRate: match.commissionRate ? parseFloat(match.commissionRate) : null,
+  };
+}
+
 
 /**
  * Get credentials from Supabase affiliate_settings with fallback to process.env
@@ -312,9 +331,39 @@ export async function fetchShopeeProductOffer({
 
   if (!cleanAppId || !cleanSecret) return null;
 
-  // Build clean search terms: exact itemId, cleaned keywords
+  // 1) Exact lookup by itemId (most reliable when the link has the item id)
+  if (itemId && /^\d+$/.test(String(itemId))) {
+    const idPayload = {
+      query: `query ItemOffer($itemId: Int64) {
+  productOfferV2(itemId: $itemId, page: 1, limit: 1) {
+    nodes {
+      itemId
+      productName
+      productLink
+      offerLink
+      imageUrl
+      priceMin
+      priceMax
+      price
+      commissionRate
+      ratingStar
+      sales
+      shopName
+    }
+  }
+}`,
+      variables: { itemId: Number(itemId) },
+    };
+
+    for (const endpoint of SHOPEE_ENDPOINTS) {
+      const res = await callShopeeGraphQL(endpoint, idPayload, cleanAppId, cleanSecret);
+      const node = res.data?.productOfferV2?.nodes?.[0];
+      if (res.ok && node) return mapOfferNode(node);
+    }
+  }
+
+  // 2) Keyword search fallback
   const searchTerms: string[] = [];
-  if (itemId) searchTerms.push(String(itemId));
   if (keyword) {
     const cleaned = keyword.replace(/[^\w\s\u00C0-\u00FF]/gi, " ").trim();
     if (cleaned) {
@@ -324,6 +373,7 @@ export async function fetchShopeeProductOffer({
       if (words && words !== cleaned) searchTerms.push(words);
     }
   }
+
 
   for (const term of searchTerms) {
     const payload = {

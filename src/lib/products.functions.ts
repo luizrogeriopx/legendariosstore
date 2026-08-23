@@ -66,11 +66,12 @@ export const scrapeShopee = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }): Promise<ShopeeMeta> => {
     return fetchShopeeMeta(data.url, {
-      appId: data.appId,
-      secret: data.secret,
+      appId: data.appId ?? null,
+      secret: data.secret ?? null,
       supabase: context.supabase,
     });
   });
+
 
 // ---- Shopee API Settings (admin only) ----
 export const getShopeeSettings = createServerFn({ method: "GET" })

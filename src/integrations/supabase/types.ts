@@ -14,6 +14,27 @@ export type Database = {
   }
   public: {
     Tables: {
+      affiliate_settings: {
+        Row: {
+          id: string
+          shopee_app_id: string | null
+          shopee_secret: string | null
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          shopee_app_id?: string | null
+          shopee_secret?: string | null
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          shopee_app_id?: string | null
+          shopee_secret?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       products: {
         Row: {
           category: string | null
@@ -86,27 +107,6 @@ export type Database = {
           id?: string
           role?: Database["public"]["Enums"]["app_role"]
           user_id?: string
-        }
-        Relationships: []
-      }
-      affiliate_settings: {
-        Row: {
-          id: string
-          shopee_app_id: string | null
-          shopee_secret: string | null
-          updated_at: string
-        }
-        Insert: {
-          id?: string
-          shopee_app_id?: string | null
-          shopee_secret?: string | null
-          updated_at?: string
-        }
-        Update: {
-          id?: string
-          shopee_app_id?: string | null
-          shopee_secret?: string | null
-          updated_at?: string
         }
         Relationships: []
       }
