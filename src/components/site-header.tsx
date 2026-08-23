@@ -30,7 +30,7 @@ export function SiteHeader({ activeCategory }: { activeCategory?: string }) {
             <ShoppingBag className="h-5 w-5" />
           </span>
           <span className="text-lg font-extrabold tracking-tight text-foreground">
-            Shop<span className="text-primary">Peça</span>
+            Legendários <span className="text-primary">Store</span>
           </span>
         </Link>
 

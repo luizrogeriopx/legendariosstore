@@ -63,8 +63,8 @@ import type { ShopeeCatalogItem } from "@/lib/shopee-api.server";
 export const Route = createFileRoute("/admin")({
   head: () => ({
     meta: [
-      { title: "Painel Admin — ShopPeça" },
-      { name: "description", content: "Gerencie os produtos da sua vitrine." },
+      { title: "Painel Admin — Legendários Store" },
+      { name: "description", content: "Gerencie os produtos da sua vitrine Legendários Store." },
     ],
   }),
   beforeLoad: async () => {

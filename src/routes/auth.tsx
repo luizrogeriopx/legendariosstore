@@ -9,10 +9,10 @@ import { Link } from "@tanstack/react-router";
 export const Route = createFileRoute("/auth")({
   head: () => ({
     meta: [
-      { title: "Acesso Administrativo — ShopPeça" },
+      { title: "Acesso Administrativo — Legendários Store" },
       {
         name: "description",
-        content: "Acesso restrito ao painel administrativo.",
+        content: "Acesso restrito ao painel administrativo da Legendários Store.",
       },
     ],
   }),
@@ -54,7 +54,7 @@ function AuthPage() {
               <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-foreground/20">
                 <ShoppingBag className="h-6 w-6" />
               </span>
-              <span className="text-xl font-extrabold">ShopPeça</span>
+              <span className="text-xl font-extrabold">Legendários Store</span>
             </Link>
             <div className="space-y-4">
               <h1 className="text-4xl font-extrabold leading-tight">

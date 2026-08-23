@@ -25,7 +25,7 @@ import { getProduct } from "@/lib/products.functions";
 export const Route = createFileRoute("/produto/$id")({
   head: ({ loaderData }) => {
     const p = loaderData?.product;
-    const title = p ? `${p.title} — ShopPeça` : "Produto — ShopPeça";
+    const title = p ? `${p.title} — Legendários Store` : "Produto — Legendários Store";
     const desc =
       p?.description ||
       (p

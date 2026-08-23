@@ -9,13 +9,13 @@ import { getProducts } from "@/lib/products.functions";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "ShopPeça — Ofertas Shopee Selecionadas" },
+      { title: "Legendários Store — Ofertas Shopee Selecionadas" },
       {
         name: "description",
         content:
-          "A melhor seleção de ofertas da Shopee em um só lugar. Eletrônicos, acessórios e mais com até 55% de desconto.",
+          "A melhor seleção de ofertas da Shopee em um só lugar na Legendários Store. Eletrônicos, acessórios e mais com até 55% de desconto.",
       },
-      { property: "og:title", content: "ShopPeça — Ofertas Shopee Selecionadas" },
+      { property: "og:title", content: "Legendários Store — Ofertas Shopee Selecionadas" },
       {
         property: "og:description",
         content:
@@ -169,7 +169,7 @@ function Index() {
       <footer className="border-t border-border/60 bg-secondary/40">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-sm text-muted-foreground sm:flex-row">
           <p>
-            <span className="font-bold text-foreground">ShopPeça</span> —
+            <span className="font-bold text-foreground">Legendários Store</span> —
             vitrine de afiliados Shopee.
           </p>
           <p>
