@@ -99,14 +99,15 @@ function AdminPage() {
   const productsQuery = useQuery({
     queryKey: ["products"],
     queryFn: () => getProducts(),
-    enabled: userQuery.data?.isAdmin,
+    enabled: userQuery.data?.isAdmin === true,
   });
 
   const shopeeSettingsQuery = useQuery({
     queryKey: ["shopee-settings"],
     queryFn: () => getShopeeSettingsFn(),
-    enabled: userQuery.data?.isAdmin,
+    enabled: userQuery.data?.isAdmin === true,
   });
+
 
   const LOCAL_STORAGE_KEY = "shopee_affiliate_creds_v1";
 
@@ -263,33 +264,40 @@ function AdminPage() {
       setDraft((d) => ({
         ...d,
         shopee_url: finalUrl,
-        title: meta.title ?? d.title,
-        image_url: meta.image ?? d.image_url,
-        description: meta.description ?? d.description,
-        price: meta.price ?? d.price,
-        original_price: meta.original_price ?? d.original_price,
-        discount_pct: meta.discount_pct ?? d.discount_pct,
-        rating: meta.rating ?? d.rating,
-        sold_count: meta.sold_count ?? d.sold_count,
-        category: meta.category ?? d.category,
+        title: meta.title ?? d.title ?? "",
+        image_url: meta.image ?? d.image_url ?? null,
+        description: meta.description ?? d.description ?? null,
+        price: meta.price ?? d.price ?? null,
+        original_price: meta.original_price ?? d.original_price ?? null,
+        discount_pct: meta.discount_pct ?? d.discount_pct ?? null,
+        rating: meta.rating ?? d.rating ?? null,
+        sold_count: meta.sold_count ?? d.sold_count ?? 0,
+        category: meta.category ?? d.category ?? null,
       }));
 
-      if (meta.isOfficialLink) {
+      const gotRichData = Boolean(meta.image || meta.price);
+
+      if (meta.isOfficialLink && gotRichData) {
         toast.success(
           "Produto importado e link convertido para seu link oficial de afiliado Shopee!",
         );
       } else if (meta.apiError) {
         toast.warning(
-          `Produto importado, mas a API Shopee retornou: ${meta.apiError}. Verifique seu AppID e Senha.`,
+          `A API da Shopee retornou: ${meta.apiError}. Confira o AppID e a Chave Secreta.`,
         );
       } else if (!activeAppId || !activeSecret) {
-        toast.info(
-          "Produto importado! Configure seu AppID e Senha no topo para gerar links de afiliado automaticamente.",
+        toast.warning(
+          "A Shopee bloqueia a leitura automática de páginas. Configure seu AppID e Chave Secreta da API de Afiliados para importar título, imagem e preço automaticamente.",
+        );
+      } else if (!gotRichData) {
+        toast.warning(
+          "Não encontrei este produto na API de Afiliados. Preencha os campos manualmente abaixo.",
         );
       } else {
         toast.success("Dados do produto importados com sucesso!");
       }
       setShowForm(true);
+
     } catch (err) {
       toast.error(
         err instanceof Error
