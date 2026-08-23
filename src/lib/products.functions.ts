@@ -344,7 +344,7 @@ export const bulkSyncVitrine = createServerFn({ method: "POST" })
       original_price: item.priceMax,
       discount_pct: item.discount_pct ?? null,
       shopee_url: item.offerLink || item.productLink,
-      category: item.shopName ?? "Geral",
+      category: null,
       rating: item.ratingStar ?? null,
       sold_count: item.sales ?? 0,
       featured: idx < 4,

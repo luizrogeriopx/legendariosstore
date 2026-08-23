@@ -738,7 +738,7 @@ function AdminPage() {
         original_price: item.priceMax,
         discount_pct: item.discount_pct ?? null,
         shopee_url: finalUrl,
-        category: item.shopName ?? "Geral",
+        category: null,
         rating: item.ratingStar ?? null,
         sold_count: item.sales ?? 0,
         featured: false,
@@ -769,7 +769,7 @@ function AdminPage() {
           original_price: item.priceMax,
           discount_pct: item.discount_pct ?? null,
           shopee_url: item.offerLink || item.productLink,
-          category: item.shopName ?? "Geral",
+          category: null,
           rating: item.ratingStar ?? null,
           sold_count: item.sales ?? 0,
           featured: false,
@@ -853,7 +853,7 @@ function AdminPage() {
         discount_pct: meta.discount_pct ?? d.discount_pct ?? null,
         rating: meta.rating ?? d.rating ?? null,
         sold_count: meta.sold_count ?? d.sold_count ?? 0,
-        category: meta.category ?? d.category ?? null,
+        category: d.category || "",
       }));
 
       const gotRichData = Boolean(meta.image || meta.price);

@@ -351,7 +351,6 @@ export async function fetchShopeeMeta(
         }
         if (offer.ratingStar) rating = offer.ratingStar;
         if (offer.sales) sold_count = offer.sales;
-        if (offer.shopName) category = offer.shopName;
         if (offer.offerLink && !isOfficialLink) {
           affiliateUrl = offer.offerLink;
           isOfficialLink = true;
