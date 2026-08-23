@@ -21,6 +21,7 @@ import {
   getShopeeCredentials,
   testShopeeApiCredentials,
   searchShopeeCatalog,
+  bulkFetchAffiliateVitrine,
 } from "./shopee-api.server";
 
 export const productSchema = z.object({
@@ -257,4 +258,76 @@ export const batchImportProducts = createServerFn({ method: "POST" })
       context.userId,
       context.supabase,
     );
+  });
+
+// ---- Bulk Sync from Shopee Affiliate Vitrine/Catalog (admin only) ----
+export const bulkSyncVitrine = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) =>
+    z
+      .object({
+        appId: z.string().optional().nullable(),
+        secret: z.string().optional().nullable(),
+        count: z.number().int().min(5).max(100).default(50),
+        sortType: z.number().int().default(2),
+        keyword: z.string().optional().nullable(),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data, context }) => {
+    let appId = data.appId?.trim() || null;
+    let secret = data.secret?.trim() || null;
+
+    if (!appId || !secret) {
+      const creds = await getShopeeCredentials(context.supabase);
+      if (creds.appId) appId = creds.appId;
+      if (creds.secret) secret = creds.secret;
+    }
+
+    if (!appId || !secret) {
+      throw new Error(
+        "Configure seu App ID e Chave Secreta para sincronizar sua vitrine de afiliados Shopee.",
+      );
+    }
+
+    const { items, error } = await bulkFetchAffiliateVitrine({
+      appId,
+      secret,
+      count: data.count,
+      sortType: data.sortType,
+      keyword: data.keyword,
+    });
+
+    if (error) {
+      throw new Error(`Erro na API Shopee: ${error}`);
+    }
+
+    if (!items.length) {
+      return { count: 0, message: "Nenhum produto encontrado no catálogo Shopee." };
+    }
+
+    const toInsert: ProductInput[] = items.map((item, idx) => ({
+      title: item.productName,
+      image_url: item.imageUrl,
+      price: item.price,
+      original_price: item.priceMax,
+      discount_pct: item.discount_pct ?? null,
+      shopee_url: item.offerLink || item.productLink,
+      category: item.shopName ?? "Geral",
+      rating: item.ratingStar ?? null,
+      sold_count: item.sales ?? 0,
+      featured: idx < 4,
+      sort_order: idx,
+    }));
+
+    const res = await importProductsBatch(
+      toInsert,
+      context.userId,
+      context.supabase,
+    );
+
+    return {
+      count: res.count,
+      message: `${res.count} produtos da Shopee importados com sucesso para sua vitrine!`,
+    };
   });

@@ -567,3 +567,54 @@ export async function searchShopeeCatalog({
 
   return { items: [], hasNextPage: false, error: lastError || "Não foi possível buscar ofertas na Shopee." };
 }
+
+/**
+ * Bulk fetch products from Shopee Affiliate Vitrine/Catalog with auto pagination up to `count` items
+ */
+export async function bulkFetchAffiliateVitrine({
+  appId,
+  secret,
+  count = 50,
+  sortType = 2,
+  listType = 0,
+  keyword,
+}: {
+  appId: string;
+  secret: string;
+  count?: number;
+  sortType?: number;
+  listType?: number;
+  keyword?: string | null;
+}): Promise<{ items: ShopeeCatalogItem[]; error?: string }> {
+  const allItems: ShopeeCatalogItem[] = [];
+  const pageSize = 50;
+  const targetCount = Math.min(Math.max(count, 5), 100);
+  const maxPages = Math.ceil(targetCount / pageSize);
+
+  for (let page = 1; page <= maxPages; page++) {
+    const res = await searchShopeeCatalog({
+      keyword,
+      listType,
+      sortType,
+      page,
+      limit: Math.min(pageSize, targetCount - allItems.length),
+      appId,
+      secret,
+    });
+
+    if (res.error && allItems.length === 0) {
+      return { items: [], error: res.error };
+    }
+
+    if (res.items && res.items.length > 0) {
+      allItems.push(...res.items);
+      if (allItems.length >= targetCount || !res.hasNextPage) {
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+
+  return { items: allItems.slice(0, targetCount) };
+}

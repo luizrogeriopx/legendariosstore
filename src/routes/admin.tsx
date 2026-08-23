@@ -28,6 +28,10 @@ import {
   Store,
   Flame,
   ArrowRight,
+  Download,
+  Copy,
+  FileSpreadsheet,
+  Zap,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useServerFn } from "@tanstack/react-start";
@@ -51,6 +55,7 @@ import {
   testShopeeConnection,
   browseShopeeCatalog,
   batchImportProducts,
+  bulkSyncVitrine,
 } from "@/lib/products.functions";
 import type { Product, ProductInput } from "@/lib/products.server";
 import type { ShopeeCatalogItem } from "@/lib/shopee-api.server";
@@ -109,6 +114,13 @@ function AdminPage() {
   const testShopeeConnectionFn = useServerFn(testShopeeConnection);
   const browseShopeeCatalogFn = useServerFn(browseShopeeCatalog);
   const batchImportProductsFn = useServerFn(batchImportProducts);
+  const bulkSyncVitrineFn = useServerFn(bulkSyncVitrine);
+
+  const [syncingVitrine, setSyncingVitrine] = useState(false);
+  const [showBulkSyncModal, setShowBulkSyncModal] = useState(false);
+  const [bulkSyncCount, setBulkSyncCount] = useState(50);
+  const [bulkSyncSort, setBulkSyncSort] = useState(2);
+  const [bulkSyncKeyword, setBulkSyncKeyword] = useState("");
 
   const userQuery = useQuery({
     queryKey: ["current-user"],
@@ -268,6 +280,134 @@ function AdminPage() {
       );
     } finally {
       setTestingApi(false);
+    }
+  }
+
+  async function handleBulkSync(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+    let activeAppId = appIdInput.trim();
+    let activeSecret = secretInput.trim() || savedSecret.trim();
+
+    if (!activeAppId || !activeSecret) {
+      try {
+        const local = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (local) {
+          const p = JSON.parse(local);
+          if (p.appId && !activeAppId) activeAppId = p.appId;
+          if (p.secret && !activeSecret) activeSecret = p.secret;
+        }
+      } catch {}
+    }
+
+    if (!activeAppId || !activeSecret) {
+      toast.error("Configure seu App ID e Chave Secreta antes de sincronizar.");
+      setShowSettings(true);
+      return;
+    }
+
+    setSyncingVitrine(true);
+    try {
+      const res = await bulkSyncVitrineFn({
+        data: {
+          appId: activeAppId,
+          secret: activeSecret,
+          count: bulkSyncCount,
+          sortType: bulkSyncSort,
+          keyword: bulkSyncKeyword.trim() || undefined,
+        },
+      });
+
+      toast.success(res.message);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      setShowBulkSyncModal(false);
+      setActiveTab("vitrine");
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Erro ao sincronizar produtos da Shopee.",
+      );
+    } finally {
+      setSyncingVitrine(false);
+    }
+  }
+
+  function handleExportCSV() {
+    if (products.length === 0) {
+      toast.warning("Sua vitrine não possui produtos para exportar.");
+      return;
+    }
+
+    const headers = [
+      "ID",
+      "Titulo",
+      "Preco",
+      "Preco Original",
+      "Desconto (%)",
+      "Link de Afiliado Shopee",
+      "Categoria",
+      "Avaliacao",
+      "Vendidos",
+      "Destaque",
+      "URL Imagem",
+    ];
+
+    const rows = products.map((p) => [
+      `"${p.id}"`,
+      `"${(p.title || "").replace(/"/g, '""')}"`,
+      p.price != null ? p.price.toFixed(2) : "",
+      p.original_price != null ? p.original_price.toFixed(2) : "",
+      p.discount_pct ?? "",
+      `"${(p.shopee_url || "").replace(/"/g, '""')}"`,
+      `"${(p.category || "").replace(/"/g, '""')}"`,
+      p.rating ?? "",
+      p.sold_count ?? 0,
+      p.featured ? "SIM" : "NAO",
+      `"${(p.image_url || "").replace(/"/g, '""')}"`,
+    ]);
+
+    const csvContent =
+      "\uFEFF" +
+      [headers.join(";"), ...rows.map((r) => r.join(";"))].join("\r\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `vitrine_afiliados_shopee_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    toast.success(`${products.length} produtos exportados para planilha CSV!`);
+  }
+
+  function handleCopyFormattedLinks() {
+    if (products.length === 0) {
+      toast.warning("Sua vitrine não possui produtos para copiar.");
+      return;
+    }
+
+    let text = "🛍️ *SELEÇÃO DE OFERTAS ESPECIAIS SHOPEE* 🛍️\n\n";
+    products.forEach((p, idx) => {
+      text += `${idx + 1}. *${p.title}*\n`;
+      if (p.price != null) {
+        text += `💰 *Por apenas ${formatBRL(p.price)}*`;
+        if (p.original_price && p.original_price > p.price) {
+          text += ` ~(${formatBRL(p.original_price)})~`;
+        }
+        if (p.discount_pct) {
+          text += ` [${p.discount_pct}% OFF]`;
+        }
+        text += "\n";
+      }
+      text += `👉 *Compre aqui:* ${p.shopee_url}\n\n`;
+    });
+
+    if (typeof window !== "undefined") {
+      navigator.clipboard.writeText(text);
+      toast.success("Lista de links formatada copiada para WhatsApp/Telegram!");
     }
   }
 
@@ -595,7 +735,36 @@ function AdminPage() {
               {products.length} produtos na vitrine
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowBulkSyncModal(true)}
+              className="border-primary/50 text-foreground hover:bg-primary/10"
+            >
+              <Zap className="mr-1.5 h-4 w-4 text-amber-500 fill-amber-500" />
+              Sincronizar em Massa Shopee
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportCSV}
+              className="text-xs"
+              title="Baixar planilha CSV com todos os produtos e links de afiliado"
+            >
+              <FileSpreadsheet className="mr-1.5 h-4 w-4 text-emerald-600" />
+              Exportar CSV
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleCopyFormattedLinks}
+              className="text-xs"
+              title="Copiar lista de ofertas formatada para WhatsApp / Telegram"
+            >
+              <Copy className="mr-1.5 h-4 w-4 text-primary" />
+              Copiar Links
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -607,7 +776,7 @@ function AdminPage() {
               }
             >
               <Key className="mr-1.5 h-4 w-4" />
-              {hasApiCredentials ? "API Shopee Conectada" : "Configurar API Shopee"}
+              {hasApiCredentials ? "API Shopee" : "Configurar API"}
             </Button>
             <Button variant="outline" size="sm" onClick={signOut}>
               <LogOut className="mr-1.5 h-4 w-4" /> Sair
@@ -618,12 +787,131 @@ function AdminPage() {
               onClick={() => {
                 resetForm();
                 setShowForm(true);
+                setActiveTab("vitrine");
               }}
             >
               <Plus className="mr-1.5 h-4 w-4" /> Novo produto
             </Button>
           </div>
         </div>
+
+        {/* Bulk Sync Modal */}
+        {showBulkSyncModal && (
+          <Card className="mb-6 border-primary/40 bg-card p-5 shadow-lg">
+            <div className="mb-4 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Zap className="h-5 w-5 fill-amber-500 text-amber-500" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-foreground">
+                    Sincronização em Massa da Vitrine Shopee Afiliados
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    Importe dezenas de produtos reais da Shopee automaticamente com seus links oficiais de afiliado gerados via API.
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowBulkSyncModal(false)}
+              >
+                ✕
+              </Button>
+            </div>
+
+            <form onSubmit={handleBulkSync} className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-3">
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-semibold text-foreground">
+                    Quantidade de Produtos
+                  </span>
+                  <select
+                    value={bulkSyncCount}
+                    onChange={(e) => setBulkSyncCount(Number(e.target.value))}
+                    className={inputCls}
+                  >
+                    <option value={20}>20 produtos</option>
+                    <option value={50}>50 produtos (Recomendado)</option>
+                    <option value={100}>100 produtos (Catálogo Completo)</option>
+                  </select>
+                </label>
+
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-semibold text-foreground">
+                    Critério de Seleção
+                  </span>
+                  <select
+                    value={bulkSyncSort}
+                    onChange={(e) => setBulkSyncSort(Number(e.target.value))}
+                    className={inputCls}
+                  >
+                    <option value={2}>🔥 Mais Vendidos da Shopee</option>
+                    <option value={5}>💎 Maiores Comissões de Afiliado</option>
+                    <option value={1}>⭐ Relevância / Em Alta</option>
+                    <option value={6}>🏷️ Menor Preço</option>
+                  </select>
+                </label>
+
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-semibold text-foreground">
+                    Nicho / Palavra-chave (Opcional)
+                  </span>
+                  <input
+                    type="text"
+                    value={bulkSyncKeyword}
+                    onChange={(e) => setBulkSyncKeyword(e.target.value)}
+                    placeholder="Ex: smartwatch, fone, beleza (ou vazio)"
+                    className={inputCls}
+                  />
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <p className="text-xs text-muted-foreground">
+                  {hasApiCredentials ? (
+                    <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                      ✓ API Shopee conectada com seu AppID e Chave Secreta.
+                    </span>
+                  ) : (
+                    <span className="text-amber-600 dark:text-amber-400 font-medium">
+                      ⚠️ Configure suas credenciais da Shopee para sincronizar.
+                    </span>
+                  )}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowBulkSyncModal(false)}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={syncingVitrine}
+                    className="shopee-gradient text-primary-foreground font-semibold"
+                  >
+                    {syncingVitrine ? (
+                      <>
+                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                        Sincronizando {bulkSyncCount} produtos...
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="mr-1.5 h-4 w-4 fill-primary-foreground text-primary-foreground" />
+                        Sincronizar {bulkSyncCount} Produtos Agora
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </form>
+          </Card>
+        )}
 
         {/* Settings Card */}
         {showSettings && (
