@@ -9,10 +9,10 @@ import { Link } from "@tanstack/react-router";
 export const Route = createFileRoute("/auth")({
   head: () => ({
     meta: [
-      { title: "Entrar — ShopPeça" },
+      { title: "Acesso Administrativo — ShopPeça" },
       {
         name: "description",
-        content: "Acesse o painel de afiliados ShopPeça.",
+        content: "Acesso restrito ao painel administrativo.",
       },
     ],
   }),
@@ -21,7 +21,6 @@ export const Route = createFileRoute("/auth")({
 
 function AuthPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"signin" | "signup">("signup");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -30,18 +29,12 @@ function AuthPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({ email, password });
-        if (error) throw error;
-        toast.success("Conta criada! Você já pode acessar o painel.");
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
-        toast.success("Bem-vindo de volta!");
-      }
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
+      toast.success("Bem-vindo de volta!");
       navigate({ to: "/admin" });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Falha na autenticação");
@@ -65,15 +58,15 @@ function AuthPage() {
             </Link>
             <div className="space-y-4">
               <h1 className="text-4xl font-extrabold leading-tight">
-                Gerencie sua vitrine de afiliados Shopee
+                Painel Administrativo
               </h1>
               <p className="max-w-sm text-primary-foreground/80">
-                Cole um link, e puxamos título, imagem e preço
-                automaticamente. Adicione, edite e destaque produtos em segundos.
+                Acesse para gerenciar produtos, cadastrar links de afiliados e
+                atualizar sua vitrine.
               </p>
             </div>
             <p className="text-sm text-primary-foreground/60">
-              O primeiro cadastro vira administrador automaticamente.
+              Acesso exclusivo ao administrador.
             </p>
           </div>
         </div>
@@ -83,12 +76,10 @@ function AuthPage() {
           <div className="w-full max-w-sm space-y-6">
             <div className="space-y-1 text-center lg:text-left">
               <h2 className="text-2xl font-extrabold tracking-tight text-foreground">
-                {mode === "signup" ? "Criar conta" : "Entrar"}
+                Entrar
               </h2>
               <p className="text-sm text-muted-foreground">
-                {mode === "signup"
-                  ? "Crie sua conta para gerenciar a loja."
-                  : "Acesse o painel de administração."}
+                Informe suas credenciais para gerenciar a loja.
               </p>
             </div>
 
@@ -104,7 +95,7 @@ function AuthPage() {
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="voce@email.com"
+                    placeholder="seu@email.com"
                     className="w-full rounded-lg border border-input bg-card py-2.5 pl-9 pr-3 text-sm text-foreground outline-none ring-ring transition focus:border-primary focus:ring-2 focus:ring-primary/30"
                   />
                 </div>
@@ -121,7 +112,7 @@ function AuthPage() {
                     minLength={6}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="mínimo 6 caracteres"
+                    placeholder="Sua senha"
                     className="w-full rounded-lg border border-input bg-card py-2.5 pl-9 pr-3 text-sm text-foreground outline-none ring-ring transition focus:border-primary focus:ring-2 focus:ring-primary/30"
                   />
                 </div>
@@ -133,21 +124,9 @@ function AuthPage() {
                 className="w-full shopee-gradient text-primary-foreground"
               >
                 {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {mode === "signup" ? "Criar conta" : "Entrar"}
+                Entrar
               </Button>
             </form>
-
-            <p className="text-center text-sm text-muted-foreground">
-              {mode === "signup" ? "Já tem conta?" : "Não tem conta?"}{" "}
-              <button
-                onClick={() =>
-                  setMode(mode === "signup" ? "signin" : "signup")
-                }
-                className="font-semibold text-primary hover:underline"
-              >
-                {mode === "signup" ? "Entrar" : "Criar conta"}
-              </button>
-            </p>
           </div>
         </div>
       </div>

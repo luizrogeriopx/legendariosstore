@@ -24,7 +24,7 @@ export function SiteHeader({ activeCategory }: { activeCategory?: string }) {
 
   return (
     <header className="sticky top-0 z-40 border-b border-border/70 bg-background/85 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-6xl items-center gap-4 px-4">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
         <Link to="/" className="flex items-center gap-2">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl shopee-gradient text-primary-foreground shadow-sm">
             <ShoppingBag className="h-5 w-5" />
@@ -34,21 +34,13 @@ export function SiteHeader({ activeCategory }: { activeCategory?: string }) {
           </span>
         </Link>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex items-center gap-2">
           {activeCategory && (
             <span className="hidden rounded-full bg-secondary px-3 py-1 text-xs font-medium text-secondary-foreground sm:inline">
               {activeCategory}
             </span>
           )}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-foreground"
-            onClick={() => router.navigate({ to: "/" })}
-          >
-            Loja
-          </Button>
-          {session ? (
+          {session && (
             <Button
               size="sm"
               onClick={() => router.navigate({ to: "/admin" })}
@@ -56,14 +48,6 @@ export function SiteHeader({ activeCategory }: { activeCategory?: string }) {
             >
               <Shield className="mr-1.5 h-4 w-4" />
               Painel
-            </Button>
-          ) : (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => router.navigate({ to: "/auth" })}
-            >
-              Entrar
             </Button>
           )}
         </div>

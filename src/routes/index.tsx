@@ -81,14 +81,6 @@ function Index() {
                 >
                   <a href="#produtos">Ver ofertas</a>
                 </Button>
-                <Button
-                  asChild
-                  size="lg"
-                  variant="outline"
-                  className="border-primary/30 text-primary hover:bg-secondary"
-                >
-                  <Link to="/auth">Virar afiliado</Link>
-                </Button>
               </div>
               <div className="flex gap-6 pt-2 text-sm text-muted-foreground">
                 <span className="flex items-center gap-1.5">
