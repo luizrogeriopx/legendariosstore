@@ -117,6 +117,38 @@ export async function deleteProduct(id: string, supabase: AuthedClient) {
   if (error) throw new Error(error.message);
 }
 
+export async function importProductsBatch(
+  products: ProductInput[],
+  userId: string,
+  supabase: AuthedClient,
+) {
+  if (!products.length) return { count: 0 };
+
+  const toInsert = products.map((p, idx) => ({
+    title: p.title,
+    description: p.description ?? null,
+    image_url: p.image_url ?? null,
+    price: p.price ?? null,
+    original_price: p.original_price ?? null,
+    discount_pct: p.discount_pct ?? null,
+    shopee_url: p.shopee_url,
+    category: p.category ?? null,
+    rating: p.rating ?? null,
+    sold_count: p.sold_count ?? 0,
+    featured: Boolean(p.featured),
+    sort_order: p.sort_order ?? idx,
+    created_by: userId,
+  }));
+
+  const { data, error } = await supabase
+    .from("products")
+    .insert(toInsert)
+    .select("id");
+
+  if (error) throw new Error(error.message);
+  return { count: data?.length ?? 0 };
+}
+
 export async function saveShopeeSettings(
   appId: string,
   secret: string,

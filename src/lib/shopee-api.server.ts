@@ -1,4 +1,4 @@
-﻿import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 
 async function sha256Hex(str: string): Promise<string> {
@@ -394,4 +394,126 @@ export async function fetchShopeeProductOffer({
   }
 
   return null;
+}
+
+export type ShopeeCatalogItem = {
+  itemId: string;
+  productName: string;
+  imageUrl: string;
+  price: number | null;
+  priceMin: number | null;
+  priceMax: number | null;
+  discount_pct?: number | null;
+  commissionRate?: number | null;
+  sales?: number | null;
+  ratingStar?: number | null;
+  shopName?: string | null;
+  productLink: string;
+  offerLink?: string | null;
+};
+
+/**
+ * Search and browse Shopee Affiliate Catalog by keyword, top sellers, or high commission
+ */
+export async function searchShopeeCatalog({
+  keyword,
+  listType = 0,
+  sortType = 1,
+  page = 1,
+  limit = 20,
+  appId,
+  secret,
+}: {
+  keyword?: string | null;
+  listType?: number;
+  sortType?: number;
+  page?: number;
+  limit?: number;
+  appId: string;
+  secret: string;
+}): Promise<{ items: ShopeeCatalogItem[]; hasNextPage: boolean; total?: number; error?: string }> {
+  const cleanAppId = appId.trim();
+  const cleanSecret = secret.trim();
+
+  if (!cleanAppId || !cleanSecret) {
+    return { items: [], hasNextPage: false, error: "Credenciais da API não informadas." };
+  }
+
+  const payload: any = {
+    query: `query BrowseCatalog($keyword: String, $listType: Int, $sortType: Int, $page: Int, $limit: Int) {
+  productOfferV2(keyword: $keyword, listType: $listType, sortType: $sortType, page: $page, limit: $limit) {
+    nodes {
+      itemId
+      productName
+      productLink
+      offerLink
+      imageUrl
+      priceMin
+      priceMax
+      price
+      commissionRate
+      ratingStar
+      sales
+      shopName
+    }
+    pageInfo {
+      page
+      limit
+      hasNextPage
+    }
+  }
+}`,
+    variables: {
+      keyword: keyword ? keyword.trim() : undefined,
+      listType: listType ?? 0,
+      sortType: sortType ?? 1,
+      page: page ?? 1,
+      limit: limit ?? 20,
+    },
+  };
+
+  let lastError = "";
+
+  for (const endpoint of SHOPEE_ENDPOINTS) {
+    const res = await callShopeeGraphQL(endpoint, payload, cleanAppId, cleanSecret);
+    if (res.ok && res.data?.productOfferV2) {
+      const data = res.data.productOfferV2;
+      const nodes = data.nodes || [];
+      const hasNextPage = Boolean(data.pageInfo?.hasNextPage);
+
+      const items: ShopeeCatalogItem[] = nodes.map((n: any) => {
+        const priceVal = parseFloat(n.price || n.priceMin || n.priceMax || 0);
+        const pMax = n.priceMax ? parseFloat(n.priceMax) : null;
+        const pMin = n.priceMin ? parseFloat(n.priceMin) : null;
+        let discount_pct: number | null = null;
+        if (pMax && priceVal && pMax > priceVal) {
+          discount_pct = Math.round(((pMax - priceVal) / pMax) * 100);
+        }
+
+        return {
+          itemId: String(n.itemId),
+          productName: n.productName || "Produto Shopee",
+          imageUrl: n.imageUrl || "",
+          price: priceVal > 0 ? priceVal : null,
+          priceMin: pMin,
+          priceMax: pMax,
+          discount_pct,
+          commissionRate: n.commissionRate ? parseFloat(n.commissionRate) : null,
+          sales: n.sales ? parseInt(n.sales, 10) : null,
+          ratingStar: n.ratingStar ? parseFloat(n.ratingStar) : null,
+          shopName: n.shopName || null,
+          productLink: n.productLink || "",
+          offerLink: n.offerLink || null,
+        };
+      });
+
+      return { items, hasNextPage };
+    }
+
+    if (res.errors && res.errors.length > 0) {
+      lastError = res.errors.map((e) => e.message).join(", ");
+    }
+  }
+
+  return { items: [], hasNextPage: false, error: lastError || "Não foi possível buscar ofertas na Shopee." };
 }

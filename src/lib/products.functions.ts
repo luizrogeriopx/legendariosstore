@@ -10,6 +10,7 @@ import {
   deleteProduct,
   fetchShopeeMeta,
   saveShopeeSettings,
+  importProductsBatch,
   type Product,
   type ProductInput,
   type ShopeeMeta,
@@ -17,6 +18,7 @@ import {
 import {
   getShopeeCredentials,
   testShopeeApiCredentials,
+  searchShopeeCatalog,
 } from "./shopee-api.server";
 
 export const productSchema = z.object({
@@ -179,4 +181,68 @@ export const removeProduct = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     await deleteProduct(data.id, context.supabase);
     return { ok: true };
+  });
+
+// ---- Browse Shopee Catalog (admin only) ----
+export const browseShopeeCatalog = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) =>
+    z
+      .object({
+        keyword: z.string().optional().nullable(),
+        listType: z.number().int().optional(),
+        sortType: z.number().int().optional(),
+        page: z.number().int().optional(),
+        limit: z.number().int().optional(),
+        appId: z.string().optional().nullable(),
+        secret: z.string().optional().nullable(),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data, context }) => {
+    let appId = data.appId?.trim() || null;
+    let secret = data.secret?.trim() || null;
+
+    if (!appId || !secret) {
+      const creds = await getShopeeCredentials(context.supabase);
+      if (creds.appId) appId = creds.appId;
+      if (creds.secret) secret = creds.secret;
+    }
+
+    if (!appId || !secret) {
+      return {
+        items: [],
+        hasNextPage: false,
+        error:
+          "Configure seu App ID e Chave Secreta para explorar o catálogo de produtos da Shopee.",
+      };
+    }
+
+    return searchShopeeCatalog({
+      keyword: data.keyword,
+      listType: data.listType,
+      sortType: data.sortType,
+      page: data.page,
+      limit: data.limit,
+      appId,
+      secret,
+    });
+  });
+
+// ---- Batch Import Products into Vitrine (admin only) ----
+export const batchImportProducts = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) =>
+    z
+      .object({
+        products: z.array(productSchema),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data, context }) => {
+    return importProductsBatch(
+      data.products as ProductInput[],
+      context.userId,
+      context.supabase,
+    );
   });
