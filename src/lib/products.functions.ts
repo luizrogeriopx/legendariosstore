@@ -5,6 +5,8 @@ import {
   listProducts,
   listFeatured,
   getCategories,
+  getProductById,
+  getRelatedProducts,
   createProduct,
   updateProduct,
   deleteProduct,
@@ -51,6 +53,15 @@ export const getProducts = createServerFn({ method: "GET" }).handler(
     };
   },
 );
+
+export const getProduct = createServerFn({ method: "GET" })
+  .inputValidator((data) => z.object({ id: z.string() }).parse(data))
+  .handler(async ({ data }) => {
+    const product = await getProductById(data.id);
+    if (!product) return { product: null, related: [] };
+    const related = await getRelatedProducts(product.category, product.id, 4);
+    return { product, related } as { product: Product | null; related: Product[] };
+  });
 
 // ---- Scrape Shopee link + generate official affiliate short link (admin only) ----
 export const scrapeShopee = createServerFn({ method: "POST" })

@@ -83,6 +83,39 @@ export async function getCategories(): Promise<string[]> {
   return [...set];
 }
 
+export async function getProductById(id: string): Promise<Product | null> {
+  const supabase = getPublishableClient();
+  const { data, error } = await supabase
+    .from("products")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data ?? null) as Product | null;
+}
+
+export async function getRelatedProducts(
+  category: string | null,
+  currentId: string,
+  limit = 4,
+): Promise<Product[]> {
+  const supabase = getPublishableClient();
+  let query = supabase
+    .from("products")
+    .select("*")
+    .neq("id", currentId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (category) {
+    query = query.eq("category", category);
+  }
+
+  const { data, error } = await query;
+  if (error) return [];
+  return (data ?? []) as Product[];
+}
+
 export async function createProduct(
   input: ProductInput,
   userId: string,
